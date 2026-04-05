@@ -1,0 +1,1085 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>LegaSea Coffee Cart – Operations</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            kaiBurgundy: '#6B1F1F',
+            kaiGreen:    '#3E5C48',
+            kaiYellow:   '#F2E6D8',
+            kaiBlue:     '#1F3A5F',
+            coffeeBrown: '#4A2C1A',
+            coffeeLight: '#C8956C',
+            coffeeCream: '#FBF5EE'
+          },
+          fontFamily: {
+            serif: ['Playfair Display','serif'],
+            sans:  ['Inter','sans-serif']
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-kaiYellow font-sans">
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+
+// =====================================================================
+// CONFIGURATION
+// =====================================================================
+const CONFIG = {
+  LOGO_URL: "https://raw.githubusercontent.com/bopde/Kai-Ika-report/main/KAI-IKA_log_white-on-trans01.png",
+  APP_TITLE: "Coffee Cart",
+  STORAGE_KEYS: {
+    WEB_APP_URL: "coffeeCartWebAppUrl",
+    FORM_DATA:   "coffeeCartFormData"
+  },
+  TOAST_DURATION: { SUCCESS: 5000, COPIED: 1500 },
+
+  SALES_ITEMS: [
+    "White Coffee - Rg",
+    "White Coffee - Lg",
+    "Black Coffee - Rg / Lg",
+    "Hot Choc - Rg",
+    "Hot Choc - Lg",
+    "Alt Milk",
+    "Coke",
+    "Iced Coffee - Can",
+    "Tea - Rg / Lg",
+    "Coffee - Other",
+    "Donation"
+  ],
+
+  STOCK_ITEMS: [
+    "Cup - Lg",
+    "Cup - Sm",
+    "Milk - Cow 2L",
+    "Milk - Oat 1L",
+    "Beans - 1kg",
+    "Chocolate powder - bag",
+    "Chocolate sauce - 500ml bottle",
+    "Tea - box",
+    "Iced Coffee - can",
+    "Coke",
+    "Sprite",
+    "Coke Zero",
+    "L&P"
+  ],
+
+  STAFF: ["Ben", "Connor", "Dave", "Opu", "Matt", "Jay", "Xavier", "Volunteer", "Other"]
+};
+
+// =====================================================================
+// HELPERS
+// =====================================================================
+const today = () => new Date().toISOString().slice(0,10);
+const nowTime = () => new Date().toTimeString().slice(0,5);
+
+const hasData = v => {
+  if (v === null || v === undefined || v === "") return false;
+  if (typeof v === "number") return v !== 0;
+  return String(v).trim() !== "" && v !== "0";
+};
+
+function buildSummaryText(state) {
+  const {
+    date, formCompletedBy, eventName, location, staffRows,
+    salesRows, cashSales, eftposSales,
+    stockUsed, fridgeReadings, crowdNotes,
+    equipmentIssues, legaseaSignups, notes
+  } = state;
+
+  const totalSales = (parseFloat(cashSales||0) + parseFloat(eftposSales||0)).toFixed(2);
+
+  let s = `Date: ${date || "-"}
+Event: ${eventName || "-"}
+Location: ${location || "-"}
+Completed By: ${formCompletedBy || "-"}
+`;
+
+  if (staffRows.length > 0) {
+    s += `\n--- Staff ---\n`;
+    staffRows.forEach(r => {
+      s += `${r.staffName}, Start: ${r.startTime || "-"}, End: ${r.endTime || "-"}\n`;
+    });
+  }
+
+  const hasSales = salesRows.some(r => hasData(r.quantity));
+  if (hasSales || hasData(cashSales) || hasData(eftposSales)) {
+    s += `\n--- Sales ---\n`;
+    salesRows.filter(r => hasData(r.quantity)).forEach(r => {
+      s += `${r.product}: ${r.quantity}\n`;
+    });
+    s += `Cash Sales: $${cashSales || "0.00"}\n`;
+    s += `Eftpos Sales: $${eftposSales || "0.00"}\n`;
+    s += `Total Sales: $${totalSales}\n`;
+  }
+
+  const hasStock = stockUsed.some(r => hasData(r.quantity));
+  if (hasStock) {
+    s += `\n--- Stock Used ---\n`;
+    stockUsed.filter(r => hasData(r.quantity)).forEach(r => {
+      s += `${r.item}: ${r.quantity}\n`;
+    });
+  }
+
+  if (fridgeReadings.length > 0) {
+    s += `\n--- Fridge Temperatures ---\n`;
+    fridgeReadings.forEach(r => {
+      s += `${r.time}: ${r.temp}°C\n`;
+    });
+  }
+
+  if (hasData(legaseaSignups)) {
+    s += `\nLegaSea Email Signups: ${legaseaSignups}\n`;
+  }
+
+  if (hasData(crowdNotes) || hasData(equipmentIssues) || hasData(notes)) {
+    s += `\n--- Notes ---\n`;
+    if (hasData(crowdNotes)) s += `Crowd & Busy Periods: ${crowdNotes}\n`;
+    if (hasData(equipmentIssues)) s += `Equipment / Water / Power Issues: ${equipmentIssues}\n`;
+    if (hasData(notes)) s += `General Notes: ${notes}\n`;
+  }
+
+  return s;
+}
+
+// =====================================================================
+// INITIAL STOCK defaults — zero
+// =====================================================================
+const defaultStockUsed  = () => CONFIG.STOCK_ITEMS.map(item => ({ item, quantity: "" }));
+const defaultSalesRows  = () => CONFIG.SALES_ITEMS.map(product => ({ product, quantity: "" }));
+
+// =====================================================================
+// TOAST
+// =====================================================================
+function Toast({ msg, color }) {
+  if (!msg) return null;
+  return (
+    <div className={`fixed top-4 left-1/2 -translate-x-1/2 ${color} text-white px-6 py-3 rounded-lg shadow-lg z-[60] font-sans text-sm`}>
+      {msg}
+    </div>
+  );
+}
+
+// =====================================================================
+// SETTINGS SCREEN
+// =====================================================================
+function SetupScreen({ webAppUrl, setWebAppUrl, onSave }) {
+  const [url, setUrl] = useState(webAppUrl);
+  return (
+    <div className="min-h-screen flex items-center justify-center p-6">
+      <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-lg">
+        <h1 className="text-3xl font-serif mb-2 text-center text-kaiBurgundy">Initial Setup</h1>
+        <p className="text-sm text-gray-500 text-center mb-6">Enter your Google Apps Script Web App URL</p>
+        <input
+          className="w-full border rounded px-3 py-2 mb-4 font-sans"
+          placeholder="https://script.google.com/macros/s/..."
+          value={url}
+          onChange={e => setUrl(e.target.value)}
+        />
+        <button
+          className="w-full bg-kaiBurgundy hover:bg-red-700 text-white py-2 rounded font-semibold"
+          onClick={() => {
+            if (!url.trim()) { alert("Please enter a Web App URL"); return; }
+            onSave(url.trim());
+          }}
+        >
+          Save & Continue
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// =====================================================================
+// HEADER
+// =====================================================================
+function Header({ subtitle, onBack, onSettings }) {
+  return (
+    <header className="w-full bg-kaiBurgundy text-white flex flex-col items-center py-6 shadow-lg mb-6 relative">
+      <img src={CONFIG.LOGO_URL} alt="Kai Ika" className="h-16 mb-3" />
+      <h1 className="text-3xl md:text-4xl font-serif font-bold text-center">{CONFIG.APP_TITLE}</h1>
+      {subtitle && <p className="text-coffeeLight mt-1 font-sans text-sm tracking-wide">{subtitle}</p>}
+      {onBack && (
+        <button
+          type="button"
+          className="absolute top-4 left-4 text-white hover:text-coffeeLight"
+          onClick={onBack}
+          title="Back"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/>
+          </svg>
+        </button>
+      )}
+      {onSettings && (
+        <button
+          type="button"
+          className="absolute top-4 right-4 text-white hover:text-coffeeLight"
+          onClick={onSettings}
+          title="Settings"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+        </button>
+      )}
+    </header>
+  );
+}
+
+// =====================================================================
+// HOME SCREEN — 3 big buttons
+// =====================================================================
+function HomeScreen({ onNav, onSettings }) {
+  const cards = [
+    {
+      id: "sales",
+      icon: "☕",
+      label: "Sales Report",
+      desc: "Record end-of-day event sales, stock used, and operational notes",
+      color: "bg-kaiBurgundy hover:bg-red-900"
+    },
+    {
+      id: "stock",
+      icon: "📦",
+      label: "Check Stock",
+      desc: "View current stock levels and log new reorders",
+      color: "bg-kaiGreen hover:bg-green-800"
+    },
+    {
+      id: "dashboard",
+      icon: "📊",
+      label: "Dashboard",
+      desc: "Summary of recent events, sales totals, and stock overview",
+      color: "bg-kaiBlue hover:bg-blue-900"
+    }
+  ];
+
+  return (
+    <div className="max-w-2xl mx-auto p-4 md:p-8">
+      <Header onSettings={onSettings} />
+      <div className="space-y-4 mt-2">
+        {cards.map(c => (
+          <button
+            key={c.id}
+            onClick={() => onNav(c.id)}
+            className={`w-full ${c.color} text-white rounded-xl shadow-lg p-6 text-left flex items-start gap-5 transition-transform active:scale-95`}
+          >
+            <span className="text-4xl">{c.icon}</span>
+            <div>
+              <div className="text-xl font-serif font-bold mb-1">{c.label}</div>
+              <div className="text-sm opacity-80 font-sans">{c.desc}</div>
+            </div>
+            <svg className="ml-auto mt-1 shrink-0 h-6 w-6 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7"/>
+            </svg>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// =====================================================================
+// STOCK SCREEN
+// =====================================================================
+function StockScreen({ webAppUrl, onBack }) {
+  const [tab, setTab] = useState("levels"); // levels | reorder
+  const [stockLevels, setStockLevels] = useState(null);
+  const [reorderLog, setReorderLog] = useState([]);
+  const [loadingLevels, setLoadingLevels] = useState(false);
+  const [toast, setToast] = useState(null);
+
+  // Reorder form
+  const [reorderDate, setReorderDate] = useState(today());
+  const [supplier, setSupplier] = useState("");
+  const [reorderItems, setReorderItems] = useState(
+    CONFIG.STOCK_ITEMS.map(item => ({ item, quantity: "" }))
+  );
+  const [submitting, setSubmitting] = useState(false);
+
+  // Edit stock levels inline
+  const [editLevels, setEditLevels] = useState({});
+
+  const showToast = (msg, color = "bg-kaiGreen") => {
+    setToast({ msg, color });
+    setTimeout(() => setToast(null), 2500);
+  };
+
+  const fetchStock = useCallback(async () => {
+    if (!webAppUrl) return;
+    setLoadingLevels(true);
+    try {
+      const res = await fetch(`${webAppUrl}?action=getStock`);
+      const data = await res.json();
+      if (data.success) {
+        setStockLevels(data.stock);
+        setReorderLog(data.reorderLog || []);
+      } else {
+        showToast("Error loading stock: " + data.error, "bg-kaiBurgundy");
+      }
+    } catch(err) {
+      showToast("Failed to connect: " + err.message, "bg-kaiBurgundy");
+    } finally {
+      setLoadingLevels(false);
+    }
+  }, [webAppUrl]);
+
+  useEffect(() => { fetchStock(); }, [fetchStock]);
+
+  const submitReorder = async () => {
+    const items = reorderItems.filter(r => hasData(r.quantity));
+    if (!items.length) { showToast("Enter at least one item quantity", "bg-kaiBurgundy"); return; }
+    if (!supplier.trim()) { showToast("Please enter supplier / source", "bg-kaiBurgundy"); return; }
+    setSubmitting(true);
+    try {
+      const fd = new FormData();
+      fd.append("action", "reorder");
+      fd.append("date", reorderDate);
+      fd.append("supplier", supplier);
+      items.forEach(r => {
+        fd.append("item[]", r.item);
+        fd.append("qty[]", r.quantity);
+      });
+      const res = await fetch(webAppUrl, { method: "POST", body: fd });
+      const data = await res.json();
+      if (data.success) {
+        showToast("✓ Reorder logged successfully");
+        setSupplier("");
+        setReorderItems(CONFIG.STOCK_ITEMS.map(item => ({ item, quantity: "" })));
+        setTab("levels");
+        fetchStock();
+      } else {
+        showToast("Error: " + data.error, "bg-kaiBurgundy");
+      }
+    } catch(err) {
+      showToast("Failed: " + err.message, "bg-kaiBurgundy");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const saveEdits = async () => {
+    if (!Object.keys(editLevels).length) return;
+    setSubmitting(true);
+    try {
+      const fd = new FormData();
+      fd.append("action", "updateStock");
+      Object.entries(editLevels).forEach(([item, qty]) => {
+        fd.append("item[]", item);
+        fd.append("qty[]", qty);
+      });
+      const res = await fetch(webAppUrl, { method: "POST", body: fd });
+      const data = await res.json();
+      if (data.success) {
+        showToast("✓ Stock levels updated");
+        setEditLevels({});
+        fetchStock();
+      } else {
+        showToast("Error: " + data.error, "bg-kaiBurgundy");
+      }
+    } catch(err) {
+      showToast("Failed: " + err.message, "bg-kaiBurgundy");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const levelForItem = (item) => {
+    if (editLevels[item] !== undefined) return editLevels[item];
+    return stockLevels?.[item] ?? "-";
+  };
+
+  return (
+    <div className="max-w-2xl mx-auto p-4 md:p-8">
+      {toast && <Toast msg={toast.msg} color={toast.color} />}
+      <Header subtitle="Stock Management" onBack={onBack} />
+
+      {/* Tabs */}
+      <div className="flex rounded-lg overflow-hidden shadow mb-6">
+        {[["levels","Stock Levels"],["reorder","Log Reorder"],["log","Reorder History"]].map(([id,label]) => (
+          <button key={id} onClick={() => setTab(id)}
+            className={`flex-1 py-3 font-semibold text-sm transition-colors ${tab===id ? "bg-kaiGreen text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* STOCK LEVELS TAB */}
+      {tab === "levels" && (
+        <div className="bg-white rounded-xl shadow-md overflow-hidden">
+          <div className="bg-kaiGreen/10 px-4 py-3 flex items-center justify-between border-b">
+            <h3 className="font-serif text-kaiGreen text-lg">Current Stock Levels</h3>
+            <button onClick={fetchStock} className="text-kaiGreen text-sm hover:underline">↻ Refresh</button>
+          </div>
+          {loadingLevels ? (
+            <p className="p-6 text-center text-gray-400">Loading…</p>
+          ) : (
+            <>
+              <div className="divide-y">
+                {CONFIG.STOCK_ITEMS.map(item => {
+                  const level = stockLevels?.[item];
+                  const editVal = editLevels[item];
+                  const display = editVal !== undefined ? editVal : (level ?? "-");
+                  const low = typeof level === "number" && level <= 2;
+                  return (
+                    <div key={item} className="flex items-center px-4 py-3 gap-3">
+                      <span className="flex-1 text-sm font-sans text-gray-700">{item}</span>
+                      {low && <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full">Low</span>}
+                      <input
+                        type="number"
+                        className="w-20 border rounded px-2 py-1 text-sm text-right font-sans"
+                        value={display === "-" ? "" : display}
+                        placeholder={display === "-" ? "-" : undefined}
+                        onChange={e => setEditLevels(prev => ({...prev, [item]: e.target.value}))}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+              {Object.keys(editLevels).length > 0 && (
+                <div className="p-4 border-t">
+                  <button
+                    onClick={saveEdits}
+                    disabled={submitting}
+                    className="w-full bg-kaiGreen hover:bg-green-700 text-white py-2 rounded-lg font-semibold disabled:opacity-50"
+                  >
+                    {submitting ? "Saving…" : "Save Changes"}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* REORDER TAB */}
+      {tab === "reorder" && (
+        <div className="bg-white rounded-xl shadow-md overflow-hidden">
+          <div className="bg-kaiBurgundy/10 px-4 py-3 border-b">
+            <h3 className="font-serif text-kaiBurgundy text-lg">Log a Reorder</h3>
+          </div>
+          <div className="p-4 space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Date *</label>
+                <input type="date" className="w-full border rounded px-3 py-2 font-sans text-sm"
+                  value={reorderDate} onChange={e => setReorderDate(e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Supplier / Source *</label>
+                <input type="text" placeholder="e.g. Gilmours, Countdown" className="w-full border rounded px-3 py-2 font-sans text-sm"
+                  value={supplier} onChange={e => setSupplier(e.target.value)} />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Quantities Received</label>
+              <div className="divide-y border rounded-lg overflow-hidden">
+                {reorderItems.map((r,i) => (
+                  <div key={r.item} className="flex items-center px-3 py-2 gap-3">
+                    <span className="flex-1 text-sm font-sans text-gray-700">{r.item}</span>
+                    <input
+                      type="number"
+                      placeholder="0"
+                      className="w-20 border rounded px-2 py-1 text-sm text-right font-sans"
+                      value={r.quantity}
+                      onChange={e => {
+                        const updated = [...reorderItems];
+                        updated[i] = { ...r, quantity: e.target.value };
+                        setReorderItems(updated);
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+            <button
+              onClick={submitReorder}
+              disabled={submitting}
+              className="w-full bg-kaiBurgundy hover:bg-red-700 disabled:opacity-50 text-white py-3 rounded-lg font-semibold"
+            >
+              {submitting ? "Saving…" : "Submit Reorder"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* REORDER LOG TAB */}
+      {tab === "log" && (
+        <div className="bg-white rounded-xl shadow-md overflow-hidden">
+          <div className="bg-kaiBlue/10 px-4 py-3 border-b">
+            <h3 className="font-serif text-kaiBlue text-lg">Reorder History</h3>
+          </div>
+          {reorderLog.length === 0 ? (
+            <p className="p-6 text-center text-gray-400 text-sm">No reorders logged yet.</p>
+          ) : (
+            <div className="divide-y">
+              {reorderLog.map((r, i) => (
+                <div key={i} className="p-4">
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="font-semibold text-sm text-gray-800">{r.date}</span>
+                    <span className="text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">{r.supplier}</span>
+                  </div>
+                  <div className="text-xs text-gray-600 space-y-0.5">
+                    {r.items && r.items.map((it, j) => (
+                      <div key={j} className="flex justify-between">
+                        <span>{it.item}</span>
+                        <span className="font-medium">{it.qty}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =====================================================================
+// SALES SCREEN
+// =====================================================================
+function SalesScreen({ webAppUrl, onBack }) {
+  const FORM_KEY = CONFIG.STORAGE_KEYS.FORM_DATA;
+
+  const loadSaved = () => {
+    try {
+      const s = localStorage.getItem(FORM_KEY);
+      if (s) return JSON.parse(s);
+    } catch(e) {}
+    return null;
+  };
+
+  const saved = loadSaved();
+
+  const [date,              setDate]              = useState(saved?.date || today());
+  const [formCompletedBy,   setFormCompletedBy]   = useState(saved?.formCompletedBy || "");
+  const [eventName,         setEventName]         = useState(saved?.eventName || "");
+  const [location,          setLocation]          = useState(saved?.location || "");
+  const [staffRows,         setStaffRows]         = useState(saved?.staffRows || []);
+  const [salesRows,         setSalesRows]         = useState(saved?.salesRows || defaultSalesRows());
+  const [cashSales,         setCashSales]         = useState(saved?.cashSales || "");
+  const [eftposSales,       setEftposSales]       = useState(saved?.eftposSales || "");
+  const [stockUsed,         setStockUsed]         = useState(saved?.stockUsed || defaultStockUsed());
+  const [fridgeReadings,    setFridgeReadings]    = useState(saved?.fridgeReadings || []);
+  const [crowdNotes,        setCrowdNotes]        = useState(saved?.crowdNotes || "");
+  const [equipmentIssues,   setEquipmentIssues]   = useState(saved?.equipmentIssues || "");
+  const [legaseaSignups,    setLegaseaSignups]    = useState(saved?.legaseaSignups || "");
+  const [notes,             setNotes]             = useState(saved?.notes || "");
+
+  const [showSummary, setShowSummary] = useState(false);
+  const [loading,     setLoading]     = useState(false);
+  const [toast,       setToast]       = useState(null);
+  const [copied,      setCopied]      = useState(false);
+
+  const totalSales = (parseFloat(cashSales||0) + parseFloat(eftposSales||0)).toFixed(2);
+
+  const showToast = (msg, color="bg-kaiGreen") => {
+    setToast({ msg, color });
+    setTimeout(() => setToast(null), CONFIG.TOAST_DURATION.SUCCESS);
+  };
+
+  // Autosave
+  useEffect(() => {
+    const data = { date, formCompletedBy, eventName, location, staffRows, salesRows,
+      cashSales, eftposSales, stockUsed, fridgeReadings, crowdNotes, equipmentIssues,
+      legaseaSignups, notes };
+    localStorage.setItem(FORM_KEY, JSON.stringify(data));
+  }, [date, formCompletedBy, eventName, location, staffRows, salesRows,
+      cashSales, eftposSales, stockUsed, fridgeReadings, crowdNotes, equipmentIssues,
+      legaseaSignups, notes]);
+
+  const addStaff = () => setStaffRows(prev => [...prev, { staffName: CONFIG.STAFF[0], startTime: "", endTime: "" }]);
+  const removeStaff = i => setStaffRows(prev => prev.filter((_,j) => j !== i));
+
+  const addFridge = () => setFridgeReadings(prev => [...prev, { time: nowTime(), temp: "" }]);
+  const removeFridge = i => setFridgeReadings(prev => prev.filter((_,j) => j !== i));
+
+  const clearForm = () => {
+    setDate(today()); setFormCompletedBy(""); setEventName(""); setLocation("");
+    setStaffRows([]); setSalesRows(defaultSalesRows()); setCashSales(""); setEftposSales("");
+    setStockUsed(defaultStockUsed()); setFridgeReadings([]);
+    setCrowdNotes(""); setEquipmentIssues(""); setLegaseaSignups(""); setNotes("");
+    localStorage.removeItem(FORM_KEY);
+  };
+
+  const summaryState = { date, formCompletedBy, eventName, location, staffRows, salesRows,
+    cashSales, eftposSales, stockUsed, fridgeReadings, crowdNotes, equipmentIssues,
+    legaseaSignups, notes };
+
+  const submit = async () => {
+    if (!date || !formCompletedBy || !eventName) {
+      showToast("Date, Event Name and Completed By are required", "bg-kaiBurgundy");
+      return;
+    }
+    if (!webAppUrl) {
+      showToast("No Web App URL configured", "bg-kaiBurgundy");
+      return;
+    }
+    setLoading(true);
+    try {
+      const fd = new FormData();
+      const timestamp = new Date().toISOString();
+      fd.append("action", "salesReport");
+      fd.append("date", date);
+      fd.append("completedBy", formCompletedBy);
+      fd.append("eventName", eventName);
+      fd.append("location", location);
+      fd.append("timestamp", timestamp);
+
+      staffRows.forEach(r => {
+        fd.append("staffName[]", r.staffName);
+        fd.append("staffStart[]", r.startTime);
+        fd.append("staffEnd[]", r.endTime);
+      });
+
+      salesRows.filter(r => hasData(r.quantity)).forEach(r => {
+        fd.append("saleProduct[]", r.product);
+        fd.append("saleQty[]", r.quantity);
+      });
+
+      fd.append("cashSales", cashSales || "0");
+      fd.append("eftposSales", eftposSales || "0");
+      fd.append("totalSales", totalSales);
+
+      stockUsed.filter(r => hasData(r.quantity)).forEach(r => {
+        fd.append("stockItem[]", r.item);
+        fd.append("stockQty[]", r.quantity);
+      });
+
+      fridgeReadings.forEach(r => {
+        fd.append("fridgeTime[]", r.time);
+        fd.append("fridgeTemp[]", r.temp);
+      });
+
+      fd.append("crowdNotes", crowdNotes);
+      fd.append("equipmentIssues", equipmentIssues);
+      fd.append("legaseaSignups", legaseaSignups);
+      fd.append("notes", notes);
+
+      const res = await fetch(webAppUrl, { method: "POST", body: fd });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error);
+      showToast("✓ Report saved successfully");
+      setShowSummary(false);
+      clearForm();
+    } catch(err) {
+      showToast("Error: " + err.message, "bg-kaiBurgundy");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="max-w-2xl mx-auto p-4 md:p-8">
+      {toast && <Toast msg={toast.msg} color={toast.color} />}
+      {copied && <Toast msg="✓ Summary copied to clipboard" color="bg-kaiBlue" />}
+      <Header subtitle="Sales Report" onBack={onBack} />
+
+      <div className="space-y-4">
+
+        {/* Top Info */}
+        <Card title="Event Details">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Date *">
+              <input type="date" required className={inp} value={date} onChange={e => setDate(e.target.value)} />
+            </Field>
+            <Field label="Completed By *">
+              <input type="text" placeholder="Your name" className={inp} value={formCompletedBy} onChange={e => setFormCompletedBy(e.target.value)} />
+            </Field>
+            <Field label="Event Name *">
+              <input type="text" placeholder="e.g. Westhaven Boat Show" className={inp} value={eventName} onChange={e => setEventName(e.target.value)} />
+            </Field>
+            <Field label="Location">
+              <input type="text" placeholder="e.g. Westhaven Marina" className={inp} value={location} onChange={e => setLocation(e.target.value)} />
+            </Field>
+          </div>
+        </Card>
+
+        {/* Staff */}
+        <Card title="Staff" action={<AddBtn onClick={addStaff} label="+ Add Staff" />}>
+          {staffRows.length === 0 && <p className="text-sm text-gray-400 text-center py-2">No staff added yet</p>}
+          {staffRows.map((r,i) => (
+            <div key={i} className="bg-kaiGreen/10 p-3 rounded-lg relative mb-2">
+              <RemoveBtn onClick={() => removeStaff(i)} />
+              <div className="grid grid-cols-3 gap-2">
+                <select className={inp} value={r.staffName}
+                  onChange={e => setStaffRows(prev => prev.map((x,j) => j===i ? {...x, staffName: e.target.value} : x))}>
+                  {CONFIG.STAFF.map(s => <option key={s}>{s}</option>)}
+                </select>
+                <div>
+                  <span className="text-[10px] uppercase tracking-wide text-gray-400 block mb-1">Start</span>
+                  <input type="time" className={inp} value={r.startTime}
+                    onChange={e => setStaffRows(prev => prev.map((x,j) => j===i ? {...x, startTime: e.target.value} : x))} />
+                </div>
+                <div>
+                  <span className="text-[10px] uppercase tracking-wide text-gray-400 block mb-1">End</span>
+                  <input type="time" className={inp} value={r.endTime}
+                    onChange={e => setStaffRows(prev => prev.map((x,j) => j===i ? {...x, endTime: e.target.value} : x))} />
+                </div>
+              </div>
+            </div>
+          ))}
+        </Card>
+
+        {/* Sales */}
+        <Card title="Sales">
+          <div className="space-y-2">
+            <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+              {salesRows.map((r,i) => (
+                <div key={r.product} className="flex items-center gap-2">
+                  <span className="text-sm text-gray-700 flex-1 min-w-0 truncate">{r.product}</span>
+                  <input
+                    type="number"
+                    placeholder="0"
+                    className="w-16 border rounded px-2 py-1.5 text-sm text-right font-sans"
+                    value={r.quantity}
+                    onChange={e => setSalesRows(prev => prev.map((x,j) => j===i ? {...x, quantity: e.target.value} : x))}
+                  />
+                </div>
+              ))}
+            </div>
+            <div className="border-t pt-3 mt-3 grid grid-cols-3 gap-3">
+              <Field label="Cash Sales ($)">
+                <input type="number" step="0.01" placeholder="0.00" className={inp}
+                  value={cashSales} onChange={e => setCashSales(e.target.value)} />
+              </Field>
+              <Field label="Eftpos Sales ($)">
+                <input type="number" step="0.01" placeholder="0.00" className={inp}
+                  value={eftposSales} onChange={e => setEftposSales(e.target.value)} />
+              </Field>
+              <Field label="Total Sales ($)">
+                <div className={`${inp} bg-gray-50 text-gray-700 font-semibold`}>${totalSales}</div>
+              </Field>
+            </div>
+          </div>
+        </Card>
+
+        {/* Stock Used */}
+        <Card title="Stock Used">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+            {stockUsed.map((r,i) => (
+              <div key={r.item} className="flex items-center gap-2">
+                <span className="text-sm text-gray-700 flex-1 min-w-0 truncate">{r.item}</span>
+                <input
+                  type="number"
+                  placeholder="0"
+                  className="w-16 border rounded px-2 py-1.5 text-sm text-right font-sans"
+                  value={r.quantity}
+                  onChange={e => setStockUsed(prev => prev.map((x,j) => j===i ? {...x, quantity: e.target.value} : x))}
+                />
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        {/* Fridge Temperatures */}
+        <Card title="Fridge Temperature Log" action={<AddBtn onClick={addFridge} label="+ Add Reading" />}>
+          {fridgeReadings.length === 0 && <p className="text-sm text-gray-400 text-center py-2">No readings added yet</p>}
+          {fridgeReadings.map((r,i) => (
+            <div key={i} className="flex items-center gap-3 mb-2 bg-blue-50 rounded-lg p-2 relative">
+              <RemoveBtn onClick={() => removeFridge(i)} />
+              <div className="flex-1 grid grid-cols-2 gap-2">
+                <div>
+                  <span className="text-[10px] uppercase tracking-wide text-gray-400 block mb-1">Time</span>
+                  <input type="time" className={inp} value={r.time}
+                    onChange={e => setFridgeReadings(prev => prev.map((x,j) => j===i ? {...x, time: e.target.value} : x))} />
+                </div>
+                <div>
+                  <span className="text-[10px] uppercase tracking-wide text-gray-400 block mb-1">Temp (°C)</span>
+                  <input type="number" step="0.1" placeholder="e.g. 4.0" className={inp} value={r.temp}
+                    onChange={e => setFridgeReadings(prev => prev.map((x,j) => j===i ? {...x, temp: e.target.value} : x))} />
+                </div>
+              </div>
+            </div>
+          ))}
+        </Card>
+
+        {/* Operational Notes */}
+        <Card title="Operational Notes">
+          <div className="space-y-3">
+            <Field label="Estimated Crowd Size & Busy Periods">
+              <textarea
+                className={`${inp} h-20`}
+                placeholder="e.g. ~500 people, busy 10–11am and 1–2pm"
+                value={crowdNotes}
+                onChange={e => setCrowdNotes(e.target.value)}
+              />
+            </Field>
+            <Field label="Equipment / Water / Power Issues">
+              <textarea
+                className={`${inp} h-20`}
+                placeholder="e.g. No issues / Water pump slow"
+                value={equipmentIssues}
+                onChange={e => setEquipmentIssues(e.target.value)}
+              />
+            </Field>
+            <Field label="LegaSea Email Signups (count)">
+              <input type="number" placeholder="0" className={inp}
+                value={legaseaSignups} onChange={e => setLegaseaSignups(e.target.value)} />
+            </Field>
+            <Field label="General Notes">
+              <textarea
+                className={`${inp} h-24`}
+                placeholder="Any other observations..."
+                value={notes}
+                onChange={e => setNotes(e.target.value)}
+              />
+            </Field>
+          </div>
+        </Card>
+
+        {/* Review Button */}
+        <button
+          type="button"
+          onClick={() => setShowSummary(true)}
+          className="w-full bg-kaiGreen hover:bg-green-700 text-white py-4 rounded-xl text-lg font-serif font-bold shadow-lg"
+        >
+          Review & Submit
+        </button>
+      </div>
+
+      {/* Summary Modal */}
+      {showSummary && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-kaiYellow w-full max-w-2xl rounded-xl shadow-xl overflow-y-auto max-h-[90vh] p-6 relative">
+            <button type="button" className="absolute top-4 right-4 text-kaiBurgundy text-xl font-bold"
+              onClick={() => setShowSummary(false)}>✕</button>
+            <h2 className="text-2xl font-serif font-bold mb-4 text-kaiBurgundy">Report Summary</h2>
+            <pre className="whitespace-pre-wrap font-sans text-gray-800 text-sm bg-white p-4 rounded-lg">
+              {buildSummaryText(summaryState)}
+            </pre>
+            <button
+              type="button"
+              className="mt-4 w-full bg-kaiBlue hover:bg-blue-900 text-white py-2 rounded-lg font-semibold"
+              onClick={() => {
+                navigator.clipboard.writeText(buildSummaryText(summaryState));
+                setCopied(true);
+                setTimeout(() => setCopied(false), CONFIG.TOAST_DURATION.COPIED);
+              }}
+            >
+              Copy Summary
+            </button>
+            <button
+              type="button"
+              disabled={loading}
+              onClick={submit}
+              className="mt-3 w-full bg-kaiBurgundy hover:bg-red-700 disabled:bg-gray-300 text-white py-3 rounded-xl text-lg font-serif font-bold shadow"
+            >
+              {loading ? "Saving…" : "Submit Report"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =====================================================================
+// DASHBOARD SCREEN
+// =====================================================================
+function DashboardScreen({ webAppUrl, onBack }) {
+  const [data, setData]     = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [toast, setToast]   = useState(null);
+
+  useEffect(() => {
+    if (!webAppUrl) { setLoading(false); return; }
+    fetch(`${webAppUrl}?action=dashboard`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.success) setData(d);
+        else setToast({ msg: "Error: " + d.error, color: "bg-kaiBurgundy" });
+      })
+      .catch(err => setToast({ msg: "Failed to connect", color: "bg-kaiBurgundy" }))
+      .finally(() => setLoading(false));
+  }, [webAppUrl]);
+
+  const statCard = (label, value, color="text-kaiBurgundy") => (
+    <div className="bg-white rounded-xl shadow p-4 text-center">
+      <div className={`text-3xl font-serif font-bold ${color}`}>{value ?? "-"}</div>
+      <div className="text-xs text-gray-500 mt-1 font-sans">{label}</div>
+    </div>
+  );
+
+  return (
+    <div className="max-w-2xl mx-auto p-4 md:p-8">
+      {toast && <Toast msg={toast.msg} color={toast.color} />}
+      <Header subtitle="Dashboard" onBack={onBack} />
+
+      {loading ? (
+        <div className="text-center py-16 text-gray-400">Loading dashboard…</div>
+      ) : !data ? (
+        <div className="bg-white rounded-xl shadow p-8 text-center text-gray-500">
+          <p className="text-lg font-serif text-kaiBurgundy mb-2">No data yet</p>
+          <p className="text-sm">Submit your first sales report to see dashboard stats.</p>
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {/* Key Stats */}
+          <div className="grid grid-cols-2 gap-4">
+            {statCard("Total Events", data.totalEvents, "text-kaiBurgundy")}
+            {statCard("Total Revenue", data.totalRevenue ? `$${data.totalRevenue}` : "-", "text-kaiGreen")}
+            {statCard("LegaSea Signups", data.totalSignups, "text-kaiBlue")}
+            {statCard("Avg Revenue / Event", data.avgRevenue ? `$${data.avgRevenue}` : "-", "text-coffeeBrown")}
+          </div>
+
+          {/* Recent Events */}
+          {data.recentEvents && data.recentEvents.length > 0 && (
+            <div className="bg-white rounded-xl shadow-md overflow-hidden">
+              <div className="bg-kaiBurgundy/10 px-4 py-3 border-b">
+                <h3 className="font-serif text-kaiBurgundy text-lg">Recent Events</h3>
+              </div>
+              <div className="divide-y">
+                {data.recentEvents.map((ev, i) => (
+                  <div key={i} className="px-4 py-3 flex justify-between items-center">
+                    <div>
+                      <div className="font-semibold text-sm text-gray-800">{ev.eventName}</div>
+                      <div className="text-xs text-gray-400">{ev.date} · {ev.location}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-sm font-bold text-kaiGreen">{ev.totalSales ? `$${ev.totalSales}` : "-"}</div>
+                      <div className="text-xs text-gray-400">{ev.signups} signups</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Top Sellers */}
+          {data.topProducts && data.topProducts.length > 0 && (
+            <div className="bg-white rounded-xl shadow-md overflow-hidden">
+              <div className="bg-kaiGreen/10 px-4 py-3 border-b">
+                <h3 className="font-serif text-kaiGreen text-lg">Top Sellers</h3>
+              </div>
+              <div className="divide-y">
+                {data.topProducts.map((p, i) => (
+                  <div key={i} className="px-4 py-2 flex justify-between items-center">
+                    <span className="text-sm text-gray-700">{i+1}. {p.product}</span>
+                    <span className="text-sm font-bold text-gray-800">{p.qty} sold</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Current Stock */}
+          {data.stockLevels && (
+            <div className="bg-white rounded-xl shadow-md overflow-hidden">
+              <div className="bg-kaiBlue/10 px-4 py-3 border-b">
+                <h3 className="font-serif text-kaiBlue text-lg">Current Stock Levels</h3>
+              </div>
+              <div className="divide-y">
+                {CONFIG.STOCK_ITEMS.map(item => {
+                  const level = data.stockLevels[item];
+                  const low = typeof level === "number" && level <= 2;
+                  return (
+                    <div key={item} className="flex items-center px-4 py-2 gap-2">
+                      <span className="flex-1 text-sm text-gray-700">{item}</span>
+                      {low && <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full">Low</span>}
+                      <span className={`text-sm font-bold ${low ? "text-red-600" : "text-gray-800"}`}>
+                        {level ?? "-"}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =====================================================================
+// SMALL REUSABLE COMPONENTS
+// =====================================================================
+const inp = "w-full border rounded px-3 py-2 font-sans text-sm";
+
+function Card({ title, children, action }) {
+  return (
+    <div className="bg-white rounded-xl shadow-md overflow-hidden">
+      <div className="px-4 py-3 border-b flex items-center justify-between">
+        <h3 className="text-lg font-serif text-kaiGreen">{title}</h3>
+        {action}
+      </div>
+      <div className="p-4">{children}</div>
+    </div>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <div>
+      <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+function AddBtn({ onClick, label }) {
+  return (
+    <button type="button" onClick={onClick}
+      className="bg-kaiBurgundy hover:bg-red-700 text-white px-3 py-1 rounded-lg font-semibold text-xs shadow">
+      {label}
+    </button>
+  );
+}
+
+function RemoveBtn({ onClick }) {
+  return (
+    <span className="absolute -top-2 -right-2 bg-white text-gray-600 rounded-full w-5 h-5 flex items-center justify-center shadow cursor-pointer text-xs z-10"
+      onClick={onClick}>✕</span>
+  );
+}
+
+// =====================================================================
+// ROOT APP
+// =====================================================================
+function App() {
+  const [webAppUrl, setWebAppUrl] = useState(localStorage.getItem(CONFIG.STORAGE_KEYS.WEB_APP_URL) || "");
+  const [configured, setConfigured] = useState(!!localStorage.getItem(CONFIG.STORAGE_KEYS.WEB_APP_URL));
+  const [screen, setScreen] = useState("home"); // home | sales | stock | dashboard
+
+  const saveUrl = url => {
+    localStorage.setItem(CONFIG.STORAGE_KEYS.WEB_APP_URL, url);
+    setWebAppUrl(url);
+    setConfigured(true);
+  };
+
+  if (!configured) {
+    return <SetupScreen webAppUrl={webAppUrl} setWebAppUrl={setWebAppUrl} onSave={saveUrl} />;
+  }
+
+  if (screen === "sales")     return <SalesScreen     webAppUrl={webAppUrl} onBack={() => setScreen("home")} />;
+  if (screen === "stock")     return <StockScreen     webAppUrl={webAppUrl} onBack={() => setScreen("home")} />;
+  if (screen === "dashboard") return <DashboardScreen webAppUrl={webAppUrl} onBack={() => setScreen("home")} />;
+
+  return <HomeScreen onNav={setScreen} onSettings={() => setConfigured(false)} />;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
