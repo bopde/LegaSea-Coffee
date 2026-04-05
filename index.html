@@ -1343,22 +1343,24 @@ function StockScreen({webAppUrl,onBack}){
 // Fetches allEvents from backend, filters client-side.
 // ═══════════════════════════════════════════════════════
 function DashScreen({webAppUrl,onBack}){
-  const[rawData,setRaw]   = useState(null);
+  const[rawData,setRaw]     = useState(null);
   const[loading,setLoading] = useState(true);
-  const[toast,setToast]   = useState(null);
-  const[range,setRange]   = useState("30");
-  const[cFrom,setCFrom]   = useState("");
-  const[cTo,setCTo]       = useState(toDay());
-  const[detail,setDetail] = useState(null);
-
-  const toast2=(m,c="bg-kaiBurgundy")=>{ setToast({m,c}); setTimeout(()=>setToast(null),3000); };
+  const[fetchErr,setFetchErr] = useState(null);  // persistent error — not a toast
+  const[range,setRange]     = useState("30");
+  const[cFrom,setCFrom]     = useState("");
+  const[cTo,setCTo]         = useState(toDay());
+  const[detail,setDetail]   = useState(null);
 
   useEffect(()=>{
-    if(!webAppUrl){ setLoading(false); return; }
+    if(!webAppUrl){ setLoading(false); setFetchErr("No Web App URL configured — go to Settings."); return; }
+    setFetchErr(null);
     fetch(`${webAppUrl}?action=dashboard`)
       .then(r=>r.json())
-      .then(d=>{ if(d.success) setRaw(d); else toast2("Dashboard error: "+d.error); })
-      .catch(e=>toast2("Could not connect to Apps Script"))
+      .then(d=>{
+        if(d.success) setRaw(d);
+        else setFetchErr("Apps Script error: "+(d.error||"unknown"));
+      })
+      .catch(()=>setFetchErr("Could not connect to the Apps Script. Check the URL in Settings and ensure the script is deployed."))
       .finally(()=>setLoading(false));
   },[webAppUrl]);
 
@@ -1367,12 +1369,13 @@ function DashScreen({webAppUrl,onBack}){
     if(!rawData?.allEvents) return null;
     const all = rawData.allEvents;
     const now = new Date();
-    let from=null, to=toDay();
+    // from/to are ISO date strings or null (null = no bound)
+    let from=null, to=null;
     if(range==="7"){  const d=new Date(now); d.setDate(d.getDate()-7);  from=d.toISOString().slice(0,10); }
     if(range==="30"){ const d=new Date(now); d.setDate(d.getDate()-30); from=d.toISOString().slice(0,10); }
     if(range==="90"){ const d=new Date(now); d.setDate(d.getDate()-90); from=d.toISOString().slice(0,10); }
-    if(range==="custom"){ from=cFrom||null; to=cTo||toDay(); }
-    // "all" → no date filter
+    if(range==="custom"){ from=cFrom||null; to=cTo||null; }
+    // range==="all" → from and to both null, no filter applied
     const evs = all.filter(ev=>{
       if(from && ev.date<from) return false;
       if(to   && ev.date>to)   return false;
@@ -1409,7 +1412,6 @@ function DashScreen({webAppUrl,onBack}){
 
   return(
     <div className="min-h-screen flex flex-col">
-      {toast&&<Toast msg={toast.m} color={toast.c}/>}
       <Header sub="Dashboard" onBack={onBack}/>
       <div className="flex-1 w-full max-w-lg mx-auto px-4 pb-8 space-y-4">
 
@@ -1431,10 +1433,19 @@ function DashScreen({webAppUrl,onBack}){
           )}
         </div>
 
+        {fetchErr&&(
+          <div className="bg-red-50 border border-red-200 rounded-2xl p-4 text-sm text-red-800">
+            <div className="font-semibold mb-1">⚠ Could not load dashboard</div>
+            <div className="text-xs">{fetchErr}</div>
+          </div>
+        )}
+
         {loading
           ? <div className="text-center py-16 text-gray-400">Loading…</div>
-          : !data
-            ? <div className="bg-white rounded-2xl p-8 text-center text-sm text-gray-400">Submit your first report to see stats</div>
+          : fetchErr
+            ? null
+            : !data || data.totalEvents===0
+              ? <div className="bg-white rounded-2xl p-8 text-center text-sm text-gray-400">No events in this date range</div>
             : <>
                 {/* Key stats */}
                 <div className="grid grid-cols-2 gap-3">
