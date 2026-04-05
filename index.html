@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>LegaSea Coffee Cart</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
   <meta name="theme-color" content="#6B1F1F">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -12,251 +12,320 @@
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          colors: {
-            kaiBurgundy:'#6B1F1F', kaiGreen:'#3E5C48',
-            kaiYellow:'#F2E6D8',   kaiBlue:'#1F3A5F',
-            coffeeBrown:'#4A2C1A', coffeeLight:'#C8956C',
-          },
-          fontFamily: { serif:['Playfair Display','serif'], sans:['Inter','sans-serif'] }
-        }
-      }
-    }
+    tailwind.config={theme:{extend:{
+      colors:{kaiBurgundy:'#6B1F1F',kaiGreen:'#3E5C48',kaiYellow:'#F2E6D8',kaiBlue:'#1F3A5F',coffeeBrown:'#4A2C1A'},
+      fontFamily:{serif:['Playfair Display','serif'],sans:['Inter','sans-serif']}
+    }}}
   </script>
   <style>
-    *{-webkit-tap-highlight-color:transparent}
-    html,body{height:100%;overscroll-behavior:none}
-    .pos-layout{display:grid;grid-template-columns:1fr 200px;height:calc(100dvh - 88px)}
-    @media(max-width:480px){.pos-layout{grid-template-columns:1fr 155px}}
+    *{-webkit-tap-highlight-color:transparent;box-sizing:border-box}
+    html,body{height:100%;overscroll-behavior:none;margin:0}
+    /* Hide number spinner arrows to avoid confusion with custom +/- buttons */
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+    input[type=number]{-moz-appearance:textfield}
+    /* POS layout: fixed split, menu scrolls, order panel scrolls independently */
+    .pos-wrap{display:flex;flex-direction:column;height:100dvh}
+    .pos-body{display:grid;grid-template-columns:1fr 200px;flex:1;min-height:0;overflow:hidden}
+    @media(max-width:480px){.pos-body{grid-template-columns:1fr 155px}}
     .safe-b{padding-bottom:max(env(safe-area-inset-bottom,0px),8px)}
-    input[type=number]::-webkit-inner-spin-button{opacity:.4}
     .fade{animation:fd .15s ease}
     @keyframes fd{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
   </style>
 </head>
 <body class="bg-kaiYellow font-sans">
 <div id="root"></div>
+
 <script>
+/* Service worker for offline caching */
 if('serviceWorker'in navigator){
-  const sw=`const C='cc-v4';
-self.addEventListener('install',e=>{e.waitUntil(caches.open(C).then(c=>c.add(location.href)).then(()=>self.skipWaiting()))});
+  const sw=`const V='cc-v5';
+self.addEventListener('install',e=>{e.waitUntil(caches.open(V).then(c=>c.add(location.href)).then(()=>self.skipWaiting()))});
 self.addEventListener('activate',e=>{e.waitUntil(clients.claim())});
-self.addEventListener('fetch',e=>{if(e.request.method!=='GET')return;e.respondWith(caches.match(e.request).then(cached=>{const net=fetch(e.request).then(r=>{if(r&&r.status===200){caches.open(C).then(c=>c.put(e.request,r.clone()))}return r}).catch(()=>cached);return cached||net}))});`;
-  const url=URL.createObjectURL(new Blob([sw],{type:'application/javascript'}));
-  navigator.serviceWorker.register(url).catch(()=>{});
+self.addEventListener('fetch',e=>{
+  if(e.request.method!=='GET')return;
+  e.respondWith(caches.match(e.request).then(cached=>{
+    const net=fetch(e.request).then(r=>{
+      if(r&&r.status===200)caches.open(V).then(c=>c.put(e.request,r.clone()));
+      return r;
+    }).catch(()=>cached);
+    return cached||net;
+  }));
+});`;
+  navigator.serviceWorker.register(
+    URL.createObjectURL(new Blob([sw],{type:'application/javascript'}))
+  ).catch(()=>{});
 }
 </script>
+
 <script type="text/babel">
 const {useState,useEffect,useCallback,useMemo}=React;
 
-// ─── CONSTANTS ───────────────────────────────────────────────────────────────
-const LOGO="https://raw.githubusercontent.com/bopde/Kai-Ika-report/main/KAI-IKA_log_white-on-trans01.png";
-const URL_KEY="ccWebAppUrl";
-const EV_KEY ="ccEvent_v3"; // keep v3 key — same schema, no migration needed
-const HOURLY =30;
+// ═══════════════════════════════════════════════════════
+// CONSTANTS
+// ═══════════════════════════════════════════════════════
+const LOGO    = "https://raw.githubusercontent.com/bopde/Kai-Ika-report/main/KAI-IKA_log_white-on-trans01.png";
+const URL_KEY = "ccWebAppUrl";
+const EV_KEY  = "ccEvent_v3";   // schema unchanged from v3/v4
+const HOURLY  = 30;
 
-const STAFF=["Ben","Connor","Dave","Opu","Matt","Jay","Xavier","Volunteer","Other"];
+const STAFF = ["Ben","Connor","Dave","Opu","Matt","Jay","Xavier","Volunteer","Other"];
 
-const STOCK_ITEMS=[
+const STOCK_ITEMS = [
   "Cup - Lg","Cup - Sm","Milk - Cow 2L","Milk - Oat 1L",
   "Beans - 1kg","Chocolate powder - bag","Chocolate sauce - 500ml bottle",
   "Tea - box","Iced Coffee - can","Coke","Sprite","Coke Zero","L&P"
 ];
 
-// chocMl=50 for hot chocs; milkMl=300 for milk drinks
-const MENU=[
-  {id:"wc_sm", label:"White Coffee", size:"Rg",price:6,canAlt:true, cup:"sm",milkMl:300,beansG:19,chocMl:0,  cat:"hot"},
-  {id:"wc_lg", label:"White Coffee", size:"Lg",price:7,canAlt:true, cup:"lg",milkMl:300,beansG:19,chocMl:0,  cat:"hot"},
-  {id:"bc_sm", label:"Black Coffee", size:"Rg",price:5,canAlt:false,cup:"sm",milkMl:0,  beansG:19,chocMl:0,  cat:"hot"},
-  {id:"bc_lg", label:"Black Coffee", size:"Lg",price:5,canAlt:false,cup:"lg",milkMl:0,  beansG:19,chocMl:0,  cat:"hot"},
-  {id:"hc_sm", label:"Hot Choc",     size:"Rg",price:6,canAlt:true, cup:"sm",milkMl:300,beansG:0, chocMl:50, cat:"hot"},
-  {id:"hc_lg", label:"Hot Choc",     size:"Lg",price:7,canAlt:true, cup:"lg",milkMl:300,beansG:0, chocMl:50, cat:"hot"},
-  {id:"tea_sm",label:"Tea",          size:"Rg",price:5,canAlt:false,cup:"sm",milkMl:0,  beansG:0, chocMl:0,  cat:"hot"},
-  {id:"tea_lg",label:"Tea",          size:"Lg",price:5,canAlt:false,cup:"lg",milkMl:0,  beansG:0, chocMl:0,  cat:"hot"},
-  {id:"ic",    label:"Iced Coffee",  size:"",  price:5,canAlt:false,cup:null,milkMl:0,  beansG:0, chocMl:0,  cat:"cold",sk:"Iced Coffee - can"},
-  {id:"coke",  label:"Coke",         size:"",  price:3,canAlt:false,cup:null,milkMl:0,  beansG:0, chocMl:0,  cat:"cold",sk:"Coke"},
-  {id:"sprite",label:"Sprite",       size:"",  price:3,canAlt:false,cup:null,milkMl:0,  beansG:0, chocMl:0,  cat:"cold",sk:"Sprite"},
-  {id:"czero", label:"Coke Zero",    size:"",  price:3,canAlt:false,cup:null,milkMl:0,  beansG:0, chocMl:0,  cat:"cold",sk:"Coke Zero"},
-  {id:"lp",    label:"L&P",          size:"",  price:3,canAlt:false,cup:null,milkMl:0,  beansG:0, chocMl:0,  cat:"cold",sk:"L&P"},
-  {id:"other", label:"Coffee - Other",size:"", price:0,canAlt:false,cup:"sm",milkMl:0,  beansG:19,chocMl:0,  cat:"other",custom:true},
-  {id:"donate",label:"Donation",     size:"",  price:0,canAlt:false,cup:null,milkMl:0,  beansG:0, chocMl:0,  cat:"other",custom:true},
+// Menu items — single source of truth for POS
+// canAlt  → shows oat milk toggle (+$1)
+// cup     → 'lg' | 'sm' | null  (cup size to deduct)
+// milkMl  → cow milk per drink (ml)
+// beansG  → beans per drink (g)
+// chocMl  → choc sauce per drink (ml)
+// sk      → direct stock key for cans/bottles
+// custom  → user enters price
+const MENU = [
+  {id:"wc_sm", label:"White Coffee", size:"Rg", price:6, canAlt:true,  cup:"sm", milkMl:300, beansG:19, chocMl:0,  cat:"hot"},
+  {id:"wc_lg", label:"White Coffee", size:"Lg", price:7, canAlt:true,  cup:"lg", milkMl:300, beansG:19, chocMl:0,  cat:"hot"},
+  {id:"bc_sm", label:"Black Coffee", size:"Rg", price:5, canAlt:false, cup:"sm", milkMl:0,   beansG:19, chocMl:0,  cat:"hot"},
+  {id:"bc_lg", label:"Black Coffee", size:"Lg", price:5, canAlt:false, cup:"lg", milkMl:0,   beansG:19, chocMl:0,  cat:"hot"},
+  {id:"hc_sm", label:"Hot Choc",     size:"Rg", price:6, canAlt:true,  cup:"sm", milkMl:300, beansG:0,  chocMl:50, cat:"hot"},
+  {id:"hc_lg", label:"Hot Choc",     size:"Lg", price:7, canAlt:true,  cup:"lg", milkMl:300, beansG:0,  chocMl:50, cat:"hot"},
+  {id:"tea_sm",label:"Tea",          size:"Rg", price:5, canAlt:false, cup:"sm", milkMl:0,   beansG:0,  chocMl:0,  cat:"hot"},
+  {id:"tea_lg",label:"Tea",          size:"Lg", price:5, canAlt:false, cup:"lg", milkMl:0,   beansG:0,  chocMl:0,  cat:"hot"},
+  {id:"ic",    label:"Iced Coffee",  size:"",   price:5, canAlt:false, cup:null, milkMl:0,   beansG:0,  chocMl:0,  cat:"cold", sk:"Iced Coffee - can"},
+  {id:"coke",  label:"Coke",         size:"",   price:3, canAlt:false, cup:null, milkMl:0,   beansG:0,  chocMl:0,  cat:"cold", sk:"Coke"},
+  {id:"sprite",label:"Sprite",       size:"",   price:3, canAlt:false, cup:null, milkMl:0,   beansG:0,  chocMl:0,  cat:"cold", sk:"Sprite"},
+  {id:"czero", label:"Coke Zero",    size:"",   price:3, canAlt:false, cup:null, milkMl:0,   beansG:0,  chocMl:0,  cat:"cold", sk:"Coke Zero"},
+  {id:"lp",    label:"L&P",          size:"",   price:3, canAlt:false, cup:null, milkMl:0,   beansG:0,  chocMl:0,  cat:"cold", sk:"L&P"},
+  {id:"other", label:"Coffee - Other",size:"",  price:0, canAlt:false, cup:"sm", milkMl:0,   beansG:19, chocMl:0,  cat:"other", custom:true},
+  {id:"donate",label:"Donation",     size:"",   price:0, canAlt:false, cup:null, milkMl:0,   beansG:0,  chocMl:0,  cat:"other", custom:true},
 ];
-const CAT_ORDER=["hot","cold","other"];
-const CAT_LABEL={hot:"Hot",cold:"Cold",other:"Other"};
+const CAT_ORDER = ["hot","cold","other"];
+const CAT_LABEL = {hot:"Hot", cold:"Cold", other:"Other"};
 
-const M2R={
-  wc_sm:"White Coffee - Rg", wc_lg:"White Coffee - Lg",
-  bc_sm:"Black Coffee - Rg", bc_lg:"Black Coffee - Lg",
-  hc_sm:"Hot Choc - Rg",     hc_lg:"Hot Choc - Lg",
-  tea_sm:"Tea - Rg",         tea_lg:"Tea - Lg",
-  ic:"Iced Coffee - Can",    coke:"Coke",  czero:"Coke Zero",
-  sprite:"Sprite",           lp:"L&P",
-  other:"Coffee - Other",    donate:"Donation",
+// Map POS menu id → sales report product name
+const M2R = {
+  wc_sm:"White Coffee - Rg",  wc_lg:"White Coffee - Lg",
+  bc_sm:"Black Coffee - Rg",  bc_lg:"Black Coffee - Lg",
+  hc_sm:"Hot Choc - Rg",      hc_lg:"Hot Choc - Lg",
+  tea_sm:"Tea - Rg",          tea_lg:"Tea - Lg",
+  ic:"Iced Coffee - Can",     coke:"Coke",    czero:"Coke Zero",
+  sprite:"Sprite",            lp:"L&P",
+  other:"Coffee - Other",     donate:"Donation",
 };
-const ALL_PRODUCTS=[...new Set(Object.values(M2R))].concat(["Alt Milk"]);
+// All report product names in display order (Alt Milk appended)
+const ALL_PRODUCTS = [...new Set(Object.values(M2R)), "Alt Milk"];
 
-// Menu price lookup by report name (for deriving revenue from sales edit)
-// Uses the base price of the first matching menu item
-const PRODUCT_PRICE={};
-ALL_PRODUCTS.forEach(p=>{
-  const mid=Object.entries(M2R).find(([,n])=>n===p)?.[0];
-  const def=MENU.find(m=>m.id===mid);
-  PRODUCT_PRICE[p]=def?def.price:0;
-});
+// ═══════════════════════════════════════════════════════
+// PURE HELPERS
+// ═══════════════════════════════════════════════════════
+const fmt   = n => `$${parseFloat(n||0).toFixed(2)}`;
+const toDay = () => new Date().toISOString().slice(0,10);
+const nowT  = () => new Date().toTimeString().slice(0,5);
+const uid   = () => Math.random().toString(36).slice(2,9);
+const hasV  = v => v!==null && v!==undefined && String(v).trim()!=="";
 
-// Round stock value to 1dp
-const r1=(n)=>Math.round(parseFloat(n||0)*10)/10;
-
-// ─── HELPERS ─────────────────────────────────────────────────────────────────
-const fmt=n=>`$${parseFloat(n||0).toFixed(2)}`;
-const toDay=()=>new Date().toISOString().slice(0,10);
-const nowT=()=>new Date().toTimeString().slice(0,5);
-const uid=()=>Math.random().toString(36).slice(2,9);
-const hasV=v=>v!==null&&v!==undefined&&String(v).trim()!=="";
-const online=()=>navigator.onLine;
+// Round to 1 decimal place
+const r1 = n => Math.round(parseFloat(n||0)*10)/10;
 
 function lsGet(k,fb=null){try{const v=localStorage.getItem(k);return v?JSON.parse(v):fb}catch{return fb}}
 function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}
 function lsDel(k){try{localStorage.removeItem(k)}catch{}}
 
 function blankEv(){
-  return{id:uid(),date:toDay(),eventName:"",location:"",completedBy:"",
-    staffRows:[],orders:[],
-    salesLocked:false,salesOverride:null,
-    stockLocked:false,stockOverride:null,
-    cashSales:"",eftposSales:"",
-    fridgeReadings:[],issues:"",notes:""};
+  return {
+    id:uid(), date:toDay(), eventName:"", location:"", completedBy:"",
+    staffRows:[], orders:[],
+    // Sales section: independently editable
+    salesLocked:false, salesOverride:null,
+    // Payment totals: independently editable
+    cashSales:"", eftposSales:"",
+    // Stock section: independently editable
+    stockLocked:false, stockOverride:null,
+    fridgeReadings:[], issues:"", notes:""
+  };
 }
 
-// ─── STOCK CALCULATION ───────────────────────────────────────────────────────
-// Derive stock from a sales-quantity map. All values rounded to 1dp.
-function stockFromSales(sq){
-  let cowMl=0,oatMl=0,beansG=0,chocMl=0,cupsLg=0,cupsSm=0;
-  const cans={};
-
-  const milkDrinks=["White Coffee - Rg","White Coffee - Lg","Hot Choc - Rg","Hot Choc - Lg"];
-  const totalMilk=milkDrinks.reduce((s,p)=>s+(parseInt(sq[p])||0),0);
-  const altQty=parseInt(sq["Alt Milk"])||0;
-
-  Object.entries(sq).forEach(([prod,rawQty])=>{
-    if(prod==="Alt Milk")return;
-    const qty=parseInt(rawQty)||0; if(qty<=0)return;
-    const menuIds=Object.entries(M2R).filter(([,n])=>n===prod).map(([id])=>id);
-    menuIds.forEach(mid=>{
-      const def=MENU.find(m=>m.id===mid); if(!def)return;
-      beansG+=def.beansG*qty;
-      chocMl+=def.chocMl*qty;
-      if(def.cup==="lg")cupsLg+=qty;
-      if(def.cup==="sm")cupsSm+=qty;
-      if(def.milkMl>0&&totalMilk>0){
-        const oatShare=Math.round((qty/totalMilk)*altQty);
-        oatMl+=def.milkMl*oatShare;
-        cowMl+=def.milkMl*(qty-oatShare);
-      }
-      if(def.sk)cans[def.sk]=(cans[def.sk]||0)+qty;
-    });
-  });
-
-  const u={};
-  // Cups: whole numbers
-  if(cupsLg>0)  u["Cup - Lg"]=cupsLg;
-  if(cupsSm>0)  u["Cup - Sm"]=cupsSm;
-  // Milk in litres: 1dp (e.g. 0.9 = 900ml)
-  if(cowMl>0)   u["Milk - Cow 2L"]=r1(cowMl/1000);
-  if(oatMl>0)   u["Milk - Oat 1L"]=r1(oatMl/1000);
-  // Beans in kg: 1dp
-  if(beansG>0)  u["Beans - 1kg"]=r1(beansG/1000);
-  // Choc sauce: fraction of 500ml bottle, 1dp
-  if(chocMl>0)  u["Chocolate sauce - 500ml bottle"]=r1(chocMl/500);
-  // Cans/bottles: whole numbers
-  Object.entries(cans).forEach(([k,v])=>{if(v>0)u[k]=v;});
-  return u;
-}
-
+// ── Derive sales quantities from paid POS orders ──────
 function salesFromOrders(orders){
-  const paid=orders.filter(o=>o.status==="paid");
-  const m={};let alt=0;
+  const m={}, paid=orders.filter(o=>o.status==="paid");
+  let alt=0;
   paid.forEach(o=>o.items.forEach(it=>{
-    const rn=M2R[it.mid]; if(rn)m[rn]=(m[rn]||0)+it.qty;
-    if(it.alt)alt+=it.qty;
+    const rn=M2R[it.mid];
+    if(rn) m[rn]=(m[rn]||0)+it.qty;
+    if(it.alt) alt+=it.qty;
   }));
-  if(alt>0)m["Alt Milk"]=alt;
+  if(alt>0) m["Alt Milk"]=alt;
   return m;
 }
 
-function effSales(ev){return ev.salesLocked&&ev.salesOverride?ev.salesOverride:salesFromOrders(ev.orders||[]);}
-function effStock(ev){return ev.stockLocked&&ev.stockOverride?ev.stockOverride:stockFromSales(effSales(ev));}
+// ── Derive stock used from sales quantity map ─────────
+// All continuous values at 1dp; counts as whole numbers.
+function stockFromSales(sq){
+  let cowMl=0, oatMl=0, beansG=0, chocMl=0, cupsLg=0, cupsSm=0;
+  const cans={};
+
+  // Proportional oat milk allocation across milk drinks
+  const milkProds = ["White Coffee - Rg","White Coffee - Lg","Hot Choc - Rg","Hot Choc - Lg"];
+  const totalMilkDrinks = milkProds.reduce((s,p)=>s+(parseInt(sq[p])||0), 0);
+  const altQty = parseInt(sq["Alt Milk"])||0;
+
+  Object.entries(sq).forEach(([prod,rawQty])=>{
+    if(prod==="Alt Milk") return;
+    const qty=parseInt(rawQty)||0;
+    if(qty<=0) return;
+    // Each product name may map to one menu item
+    const mid = Object.entries(M2R).find(([,n])=>n===prod)?.[0];
+    const def = mid ? MENU.find(m=>m.id===mid) : null;
+    if(!def) return;
+    beansG += def.beansG * qty;
+    chocMl += def.chocMl * qty;
+    if(def.cup==="lg") cupsLg+=qty;
+    if(def.cup==="sm") cupsSm+=qty;
+    if(def.milkMl>0 && totalMilkDrinks>0){
+      const oatShare = Math.round((qty/totalMilkDrinks)*altQty);
+      oatMl += def.milkMl * oatShare;
+      cowMl += def.milkMl * (qty-oatShare);
+    }
+    if(def.sk) cans[def.sk]=(cans[def.sk]||0)+qty;
+  });
+
+  const u={};
+  if(cupsLg>0) u["Cup - Lg"]=cupsLg;
+  if(cupsSm>0) u["Cup - Sm"]=cupsSm;
+  if(cowMl>0)  u["Milk - Cow 2L"]=r1(cowMl/1000);
+  if(oatMl>0)  u["Milk - Oat 1L"]=r1(oatMl/1000);
+  if(beansG>0) u["Beans - 1kg"]=r1(beansG/1000);
+  if(chocMl>0) u["Chocolate sauce - 500ml bottle"]=r1(chocMl/500);
+  Object.entries(cans).forEach(([k,v])=>{ if(v>0) u[k]=v; });
+  return u;
+}
+
+// ── Effective values for an event (respects locks) ────
+// Each of the three sections — sales, payments, stock — is independently resolved.
+// Editing one never automatically changes another.
+function effSales(ev){
+  return ev.salesLocked && ev.salesOverride
+    ? ev.salesOverride
+    : salesFromOrders(ev.orders||[]);
+}
+function effStock(ev){
+  return ev.stockLocked && ev.stockOverride
+    ? ev.stockOverride
+    : stockFromSales(effSales(ev));
+}
 function effCash(ev){
-  if(hasV(ev.cashSales))return parseFloat(ev.cashSales);
-  return(ev.orders||[]).filter(o=>o.status==="paid"&&o.payMethod==="cash").reduce((s,o)=>s+o.total,0);
+  if(hasV(ev.cashSales)) return parseFloat(ev.cashSales);
+  return (ev.orders||[]).filter(o=>o.status==="paid"&&o.payMethod==="cash").reduce((s,o)=>s+o.total,0);
 }
 function effEftpos(ev){
-  if(hasV(ev.eftposSales))return parseFloat(ev.eftposSales);
-  return(ev.orders||[]).filter(o=>o.status==="paid"&&o.payMethod==="eftpos").reduce((s,o)=>s+o.total,0);
+  if(hasV(ev.eftposSales)) return parseFloat(ev.eftposSales);
+  return (ev.orders||[]).filter(o=>o.status==="paid"&&o.payMethod==="eftpos").reduce((s,o)=>s+o.total,0);
 }
 
-// Derive implied revenue total from a sales quantity map × menu prices
-// Used so that editing sales also updates the suggested total
-function revenueFromSales(sq){
-  let t=0;
-  Object.entries(sq).forEach(([prod,qty])=>{
-    if(prod==="Alt Milk"){t+=(parseInt(qty)||0)*1;return;} // alt milk = $1 premium
-    t+=(parseInt(qty)||0)*(PRODUCT_PRICE[prod]||0);
-  });
-  return t;
-}
-
+// ── Staff hours ───────────────────────────────────────
 function calcHrs(s,e){
-  if(!s||!e)return 0;
+  if(!s||!e) return 0;
   const[sh,sm]=s.split(':').map(Number),[eh,em]=e.split(':').map(Number);
   let d=new Date(0,0,0,eh,em)-new Date(0,0,0,sh,sm);
-  if(d<0)d+=86400000;
+  if(d<0) d+=86400000;
   return Math.round(d/36e5*100)/100;
 }
 
+// ── Plain-text summary for copy/review ───────────────
 function buildSummary(ev){
-  const sales=effSales(ev),stock=effStock(ev);
-  const cash=effCash(ev),eftpos=effEftpos(ev),total=cash+eftpos;
+  const sales=effSales(ev), stock=effStock(ev);
+  const cash=effCash(ev), eftpos=effEftpos(ev);
   let s=`Date: ${ev.date||"-"}\nEvent: ${ev.eventName||"-"}\nLocation: ${ev.location||"-"}\nCompleted By: ${ev.completedBy||"-"}\n`;
-  if(ev.staffRows?.length){s+=`\n--- Staff ---\n`;ev.staffRows.forEach(r=>{s+=`${r.staffName}, ${r.startTime||"-"}–${r.endTime||"-"}\n`;});}
-  if(Object.values(sales).some(v=>v>0)||total>0){
-    s+=`\n--- Sales ---\n`;
-    Object.entries(sales).filter(([,v])=>v>0).forEach(([k,v])=>{s+=`${k}: ${v}\n`;});
-    s+=`Cash: ${fmt(cash)}  Eftpos: ${fmt(eftpos)}  Total: ${fmt(total)}\n`;
+  if(ev.staffRows?.length){
+    s+=`\n--- Staff ---\n`;
+    ev.staffRows.forEach(r=>{ s+=`${r.staffName}, ${r.startTime||"-"}–${r.endTime||"-"}\n`; });
   }
-  if(Object.keys(stock).length){s+=`\n--- Stock Used ---\n`;Object.entries(stock).forEach(([k,v])=>{s+=`${k}: ${v}\n`;});}
-  if(ev.fridgeReadings?.length){s+=`\n--- Fridge ---\n`;ev.fridgeReadings.forEach(r=>{s+=`${r.time}: ${r.temp}°C\n`;});}
+  if(Object.values(sales).some(v=>v>0)||(cash+eftpos)>0){
+    s+=`\n--- Sales ---\n`;
+    Object.entries(sales).filter(([,v])=>v>0).forEach(([k,v])=>{ s+=`${k}: ${v}\n`; });
+    s+=`Cash: ${fmt(cash)}  Eftpos: ${fmt(eftpos)}  Total: ${fmt(cash+eftpos)}\n`;
+  }
+  if(Object.keys(stock).length){
+    s+=`\n--- Stock Used ---\n`;
+    Object.entries(stock).forEach(([k,v])=>{ s+=`${k}: ${v}\n`; });
+  }
+  if(ev.fridgeReadings?.length){
+    s+=`\n--- Fridge ---\n`;
+    ev.fridgeReadings.forEach(r=>{ s+=`${r.time}: ${r.temp}°C\n`; });
+  }
   if(hasV(ev.issues)||hasV(ev.notes)){
     s+=`\n--- Notes ---\n`;
-    if(hasV(ev.issues))s+=`Issues: ${ev.issues}\n`;
-    if(hasV(ev.notes))s+=`Notes: ${ev.notes}\n`;
+    if(hasV(ev.issues)) s+=`Issues: ${ev.issues}\n`;
+    if(hasV(ev.notes))  s+=`Notes: ${ev.notes}\n`;
   }
   return s;
 }
 
-// ─── ATOMS ───────────────────────────────────────────────────────────────────
-const INP="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-kaiGreen/30 bg-white";
+// ═══════════════════════════════════════════════════════
+// UI ATOMS
+// ═══════════════════════════════════════════════════════
+const INP = "w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-kaiGreen/30 bg-white";
 
 function Toast({msg,color="bg-kaiGreen"}){
-  if(!msg)return null;
-  return<div className={`fixed top-4 left-1/2 -translate-x-1/2 ${color} text-white px-5 py-2.5 rounded-2xl shadow-lg z-[100] text-sm font-medium max-w-sm text-center fade pointer-events-none`}>{msg}</div>;
+  if(!msg) return null;
+  return(
+    <div className={`fixed top-4 left-1/2 -translate-x-1/2 ${color} text-white px-5 py-2.5 rounded-2xl shadow-lg z-[100] text-sm font-medium max-w-sm text-center fade pointer-events-none`}>
+      {msg}
+    </div>
+  );
 }
 
 function OfflineBanner(){
-  const[on,setOn]=useState(online());
+  const[on,setOn]=useState(navigator.onLine);
   useEffect(()=>{
-    const u=()=>setOn(true),d=()=>setOn(false);
-    window.addEventListener('online',u);window.addEventListener('offline',d);
-    return()=>{window.removeEventListener('online',u);window.removeEventListener('offline',d);};
+    const u=()=>setOn(true), d=()=>setOn(false);
+    window.addEventListener('online',u); window.addEventListener('offline',d);
+    return()=>{ window.removeEventListener('online',u); window.removeEventListener('offline',d); };
   },[]);
-  if(on)return null;
-  return<div className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-amber-500 text-white px-4 py-2 rounded-xl z-50 text-xs font-semibold shadow-lg">⚠ Offline — data saved locally</div>;
+  if(on) return null;
+  return(
+    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-amber-500 text-white px-4 py-2 rounded-xl z-50 text-xs font-semibold shadow-lg">
+      ⚠ Offline — data saved locally
+    </div>
+  );
+}
+
+// Full-width header — lives OUTSIDE any max-width container
+function Header({sub,onBack,onSettings}){
+  return(
+    <div className="w-full bg-kaiBurgundy text-white flex flex-col items-center py-5 shadow-md mb-5 relative">
+      <img src={LOGO} alt="" className="h-12 object-contain mb-2"/>
+      <h1 className="text-2xl font-serif font-bold">Coffee Cart</h1>
+      {sub&&<p className="text-xs text-orange-200 mt-0.5 opacity-80">{sub}</p>}
+      {onBack&&(
+        <button type="button" onClick={onBack} className="absolute top-3 left-3 text-white/70 hover:text-white p-1">
+          <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/>
+          </svg>
+        </button>
+      )}
+      {onSettings&&(
+        <button type="button" onClick={onSettings} className="absolute top-3 right-3 text-white/70 hover:text-white p-1">
+          <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+        </button>
+      )}
+    </div>
+  );
 }
 
 function Card({title,children,action,accent="green"}){
-  const ac={green:"border-kaiGreen/20 bg-kaiGreen/5 text-kaiGreen",red:"border-kaiBurgundy/20 bg-kaiBurgundy/5 text-kaiBurgundy",blue:"border-kaiBlue/20 bg-kaiBlue/5 text-kaiBlue",brown:"border-amber-200 bg-amber-50 text-coffeeBrown"};
+  const ac={
+    green:"border-kaiGreen/20 bg-kaiGreen/5 text-kaiGreen",
+    red:"border-kaiBurgundy/20 bg-kaiBurgundy/5 text-kaiBurgundy",
+    blue:"border-kaiBlue/20 bg-kaiBlue/5 text-kaiBlue",
+    brown:"border-amber-200 bg-amber-50 text-coffeeBrown"
+  };
   return(
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
       <div className={`px-4 py-3 border-b flex items-center justify-between ${ac[accent]||ac.green}`}>
@@ -268,24 +337,37 @@ function Card({title,children,action,accent="green"}){
   );
 }
 
-function Fld({label,children}){return<div><label className="block text-xs font-medium text-gray-500 mb-1">{label}</label>{children}</div>;}
-function Btn({onClick,children,className="",disabled}){return<button type="button" onClick={onClick} disabled={disabled} className={`transition-all active:scale-95 disabled:opacity-40 ${className}`}>{children}</button>;}
-function AddBtn({onClick,label="+ Add"}){return<Btn onClick={onClick} className="bg-kaiBurgundy text-white px-3 py-1 rounded-lg text-xs font-semibold">{label}</Btn>;}
-function RmBtn({onClick}){return<Btn onClick={onClick} className="absolute -top-2 -right-2 bg-white border border-gray-200 text-gray-400 hover:text-red-500 rounded-full w-5 h-5 flex items-center justify-center text-xs shadow-sm">✕</Btn>;}
-
-function Header({sub,onBack,onSettings}){
+function Fld({label,children}){
   return(
-    <header className="w-full bg-kaiBurgundy text-white flex flex-col items-center py-5 shadow-md mb-5 relative -mx-4 md:-mx-8 px-4">
-      <img src={LOGO} alt="" className="h-12 object-contain mb-2"/>
-      <h1 className="text-2xl font-serif font-bold">Coffee Cart</h1>
-      {sub&&<p className="text-xs text-orange-200 mt-0.5 opacity-80">{sub}</p>}
-      {onBack&&<Btn onClick={onBack} className="absolute top-3 left-3 text-white/70 hover:text-white p-1"><svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/></svg></Btn>}
-      {onSettings&&<Btn onClick={onSettings} className="absolute top-3 right-3 text-white/70 hover:text-white p-1"><svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg></Btn>}
-    </header>
+    <div>
+      <label className="block text-xs font-medium text-gray-500 mb-1">{label}</label>
+      {children}
+    </div>
   );
 }
 
-// ─── SETUP ───────────────────────────────────────────────────────────────────
+function Btn({onClick,children,className="",disabled}){
+  return(
+    <button type="button" onClick={onClick} disabled={disabled}
+      className={`transition-all active:scale-95 disabled:opacity-40 ${className}`}>
+      {children}
+    </button>
+  );
+}
+function AddBtn({onClick,label="+ Add"}){
+  return <Btn onClick={onClick} className="bg-kaiBurgundy text-white px-3 py-1 rounded-lg text-xs font-semibold">{label}</Btn>;
+}
+function RmBtn({onClick}){
+  return(
+    <Btn onClick={onClick} className="absolute -top-2 -right-2 bg-white border border-gray-200 text-gray-400 hover:text-red-500 rounded-full w-5 h-5 flex items-center justify-center text-xs shadow-sm">
+      ✕
+    </Btn>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// SETUP SCREEN
+// ═══════════════════════════════════════════════════════
 function SetupScreen({onSave}){
   const[url,setUrl]=useState(lsGet(URL_KEY,""));
   return(
@@ -294,88 +376,111 @@ function SetupScreen({onSave}){
         <img src={LOGO} className="h-14 mx-auto mb-4 object-contain" alt=""/>
         <h1 className="text-xl font-serif text-kaiBurgundy text-center mb-1">Coffee Cart Setup</h1>
         <p className="text-xs text-gray-400 text-center mb-5">Paste your Google Apps Script Web App URL</p>
-        <input className={INP+" mb-4"} placeholder="https://script.google.com/macros/s/..." value={url} onChange={e=>setUrl(e.target.value)}/>
-        <Btn onClick={()=>{if(!url.trim()){alert("Please enter a URL");return;}onSave(url.trim());}} className="w-full bg-kaiBurgundy hover:bg-red-800 text-white py-3 rounded-xl font-semibold">Save & Continue</Btn>
+        <input className={INP+" mb-4"} placeholder="https://script.google.com/macros/s/..."
+          value={url} onChange={e=>setUrl(e.target.value)}/>
+        <Btn onClick={()=>{if(!url.trim()){alert("Please enter a URL");return;}onSave(url.trim());}}
+          className="w-full bg-kaiBurgundy hover:bg-red-800 text-white py-3 rounded-xl font-semibold">
+          Save & Continue
+        </Btn>
         <p className="text-xs text-gray-300 text-center mt-3">You can work offline — URL only needed to submit reports</p>
       </div>
     </div>
   );
 }
 
-// ─── HOME ─────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════
+// HOME SCREEN
+// Header is full-width; content is centred below it.
+// ═══════════════════════════════════════════════════════
 function HomeScreen({onNav,onSettings}){
   const active=!!lsGet(EV_KEY);
-  const cards=[
-    {id:"event",icon:"☕",label:"Sales Report",desc:"Event details, POS, and submit",color:"bg-kaiBurgundy hover:bg-red-900"},
-    {id:"stock",icon:"📦",label:"Check Stock",desc:"View levels and log reorders",color:"bg-kaiGreen hover:bg-green-800"},
-    {id:"dash", icon:"📊",label:"Dashboard",  desc:"Revenue, costs, and event history",color:"bg-kaiBlue hover:bg-blue-900"},
-  ];
   return(
-    <div className="max-w-lg mx-auto p-4 md:p-8">
+    <div className="min-h-screen flex flex-col">
       <Header onSettings={onSettings}/>
-      {active&&(
-        <div className="mb-4 bg-amber-50 border border-amber-200 rounded-2xl p-3 flex items-center gap-3">
-          <span>⚡</span>
-          <span className="flex-1 text-sm font-medium text-amber-800">Event in progress</span>
-          <Btn onClick={()=>onNav("event")} className="text-xs bg-amber-200 hover:bg-amber-300 px-3 py-1.5 rounded-lg font-semibold text-amber-900">Continue →</Btn>
+      <div className="flex-1 w-full max-w-lg mx-auto px-4 pb-8">
+        {active&&(
+          <div className="mb-4 bg-amber-50 border border-amber-200 rounded-2xl p-3 flex items-center gap-3">
+            <span>⚡</span>
+            <span className="flex-1 text-sm font-medium text-amber-800">Event in progress</span>
+            <Btn onClick={()=>onNav("event")} className="text-xs bg-amber-200 hover:bg-amber-300 px-3 py-1.5 rounded-lg font-semibold text-amber-900">
+              Continue →
+            </Btn>
+          </div>
+        )}
+        <div className="space-y-3">
+          {[
+            {id:"event", icon:"☕", label:"Sales Report",  desc:"Event details, POS, and submit",     color:"bg-kaiBurgundy hover:bg-red-900"},
+            {id:"stock", icon:"📦", label:"Check Stock",   desc:"View levels and log reorders",        color:"bg-kaiGreen hover:bg-green-800"},
+            {id:"dash",  icon:"📊", label:"Dashboard",     desc:"Revenue, costs, and event history",   color:"bg-kaiBlue hover:bg-blue-900"},
+          ].map(c=>(
+            <Btn key={c.id} onClick={()=>onNav(c.id)}
+              className={`w-full ${c.color} text-white rounded-2xl shadow p-5 text-left flex items-center gap-4`}>
+              <span className="text-3xl">{c.icon}</span>
+              <div className="flex-1 min-w-0">
+                <div className="font-serif font-bold text-base">{c.label}</div>
+                <div className="text-xs opacity-70 mt-0.5">{c.desc}</div>
+              </div>
+              <svg className="h-5 w-5 opacity-40 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7"/>
+              </svg>
+            </Btn>
+          ))}
         </div>
-      )}
-      <div className="space-y-3">
-        {cards.map(c=>(
-          <Btn key={c.id} onClick={()=>onNav(c.id)} className={`w-full ${c.color} text-white rounded-2xl shadow p-5 text-left flex items-center gap-4`}>
-            <span className="text-3xl">{c.icon}</span>
-            <div className="flex-1 min-w-0"><div className="font-serif font-bold text-base">{c.label}</div><div className="text-xs opacity-70 mt-0.5">{c.desc}</div></div>
-            <svg className="h-5 w-5 opacity-40 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7"/></svg>
-          </Btn>
-        ))}
       </div>
       <OfflineBanner/>
     </div>
   );
 }
 
-// ─── POS ─────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════
+// POS SCREEN
+// Full-height layout. Menu panel scrolls. Order panel
+// scrolls independently via flex+min-h-0. No overflow-hidden
+// on the body grid so both panels scroll freely.
+// ═══════════════════════════════════════════════════════
 function POS({event,onUpdate,onBack}){
-  const[oid,setOid]=useState(null);
-  const[oname,setOname]=useState("");
-  const[items,setItems]=useState([]);
-  const[cat,setCat]=useState("hot");
-  const[showSaved,setShowSaved]=useState(false);
-  const[payModal,setPayModal]=useState(false);
-  const[toast,setToast]=useState(null);
+  const[oid,setOid]         = useState(null);
+  const[oname,setOname]     = useState("");
+  const[items,setItems]     = useState([]);
+  const[cat,setCat]         = useState("hot");
+  const[showSaved,setShowSaved] = useState(false);
+  const[payModal,setPayModal]   = useState(false);
+  const[toast,setToast]     = useState(null);
 
-  const toast2=(m,c="bg-kaiGreen")=>{setToast({m,c});setTimeout(()=>setToast(null),2000);};
-  const orders=event.orders||[];
-  const open=orders.filter(o=>o.status==="saved"||o.status==="open");
-  const paid=orders.filter(o=>o.status==="paid");
-  const upOrders=nos=>onUpdate({...event,orders:nos});
+  const toast2=(m,c="bg-kaiGreen")=>{ setToast({m,c}); setTimeout(()=>setToast(null),2000); };
 
-  const total=useMemo(()=>items.reduce((s,it)=>{
-    const d=MENU.find(m=>m.id===it.mid);if(!d)return s;
-    const p=d.custom?(parseFloat(it.cp)||0):d.price;
-    return s+(p+(it.alt?1:0))*it.qty;
+  const orders = event.orders||[];
+  const open   = orders.filter(o=>o.status==="saved");
+  const paid   = orders.filter(o=>o.status==="paid");
+  const upOrd  = nos => onUpdate({...event, orders:nos});
+
+  const total = useMemo(()=>items.reduce((s,it)=>{
+    const d=MENU.find(m=>m.id===it.mid); if(!d) return s;
+    const p = d.custom ? (parseFloat(it.cp)||0) : d.price;
+    return s + (p+(it.alt?1:0)) * it.qty;
   },0),[items]);
 
-  const startNew=()=>{setOid(uid());setOname("");setItems([]);};
-  const loadOrd=o=>{setOid(o.id);setOname(o.name||"");setItems(o.items||[]);setShowSaved(false);};
+  const startNew = () => { setOid(uid()); setOname(""); setItems([]); };
+  const loadOrd  = o  => { setOid(o.id); setOname(o.name||""); setItems(o.items||[]); setShowSaved(false); };
 
-  const addItem=def=>{
-    if(!oid)setOid(uid());
+  // Tap menu item → merge if same menuId + same alt state, else new line
+  const addItem = def => {
+    if(!oid) setOid(uid());
     setItems(prev=>{
       if(!def.custom){
         const idx=prev.findIndex(i=>i.mid===def.id&&!i.alt);
-        if(idx>=0)return prev.map((i,j)=>j===idx?{...i,qty:i.qty+1}:i);
+        if(idx>=0) return prev.map((i,j)=>j===idx?{...i,qty:i.qty+1}:i);
       }
-      return[...prev,{lid:uid(),mid:def.id,qty:1,alt:false,cp:""}];
+      return [...prev, {lid:uid(), mid:def.id, qty:1, alt:false, cp:""}];
     });
   };
 
-  // FIX Bug 4: clean single toggle — no dead code double-setState
-  const toggleAlt=lid=>{
+  // Toggle oat milk on a line; merge into existing line with same alt state if possible
+  const toggleAlt = lid => {
     setItems(prev=>{
-      const idx=prev.findIndex(i=>i.lid===lid);if(idx<0)return prev;
-      const it=prev[idx];const newAlt=!it.alt;
-      // Try to merge into an existing line with the same menuId + new altMilk state
+      const idx=prev.findIndex(i=>i.lid===lid);
+      if(idx<0) return prev;
+      const it=prev[idx]; const newAlt=!it.alt;
       const dup=prev.findIndex((i,j)=>j!==idx&&i.mid===it.mid&&i.alt===newAlt&&!MENU.find(m=>m.id===i.mid)?.custom);
       if(dup>=0){
         return prev.map((i,j)=>j===dup?{...i,qty:i.qty+it.qty}:i).filter((_,j)=>j!==idx);
@@ -384,42 +489,52 @@ function POS({event,onUpdate,onBack}){
     });
   };
 
-  const updQty=(lid,d)=>setItems(prev=>prev.map(i=>i.lid===lid?{...i,qty:Math.max(0,i.qty+d)}:i).filter(i=>i.qty>0));
+  const updQty = (lid,d) => setItems(prev=>
+    prev.map(i=>i.lid===lid?{...i,qty:Math.max(0,i.qty+d)}:i).filter(i=>i.qty>0)
+  );
 
-  const saveOrd=()=>{
-    if(!items.length){toast2("Add items first","bg-kaiBurgundy");return;}
-    const o={id:oid||uid(),name:oname,items,total,status:"saved",savedAt:new Date().toISOString()};
+  const saveOrd = () => {
+    if(!items.length){ toast2("Add items first","bg-kaiBurgundy"); return; }
+    const o={id:oid||uid(), name:oname, items, total, status:"saved", savedAt:new Date().toISOString()};
     const idx=orders.findIndex(x=>x.id===oid);
-    upOrders(idx>=0?orders.map(x=>x.id===oid?o:x):[...orders,o]);
-    setOid(o.id);toast2("Order saved");
+    upOrd(idx>=0 ? orders.map(x=>x.id===oid?o:x) : [...orders,o]);
+    setOid(o.id); toast2("Order saved");
   };
 
-  const markPaid=method=>{
-    if(!items.length){toast2("Add items first","bg-kaiBurgundy");return;}
-    const o={id:oid||uid(),name:oname,items,total,status:"paid",payMethod:method,paidAt:new Date().toISOString()};
+  const markPaid = method => {
+    if(!items.length){ toast2("Add items first","bg-kaiBurgundy"); return; }
+    const o={id:oid||uid(), name:oname, items, total, status:"paid", payMethod:method, paidAt:new Date().toISOString()};
     const idx=orders.findIndex(x=>x.id===oid);
-    upOrders(idx>=0?orders.map(x=>x.id===oid?o:x):[...orders,o]);
-    setOid(null);setOname("");setItems([]);setPayModal(false);
+    upOrd(idx>=0 ? orders.map(x=>x.id===oid?o:x) : [...orders,o]);
+    setOid(null); setOname(""); setItems([]); setPayModal(false);
     toast2(`✓ ${fmt(o.total)} — ${method}`);
   };
 
-  const catItems=MENU.filter(m=>m.cat===cat);
-  const paidTotal=paid.reduce((s,o)=>s+o.total,0);
+  const catItems   = MENU.filter(m=>m.cat===cat);
+  const paidTotal  = paid.reduce((s,o)=>s+o.total,0);
 
   return(
-    <div className="flex flex-col bg-gray-50" style={{height:'100dvh'}}>
+    <div className="pos-wrap bg-gray-50">
       {toast&&<Toast msg={toast.m} color={toast.c}/>}
+
       {/* Top bar */}
       <div className="bg-coffeeBrown text-white px-3 py-2.5 flex items-center gap-2 shrink-0 shadow">
-        <Btn onClick={onBack} className="text-white/70 hover:text-white p-0.5"><svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/></svg></Btn>
+        <Btn onClick={onBack} className="text-white/70 hover:text-white p-0.5">
+          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/>
+          </svg>
+        </Btn>
         <div className="flex-1 min-w-0">
           <span className="font-serif font-bold text-sm">☕ POS</span>
           <span className="text-xs text-white/50 ml-2 hidden sm:inline">{event.eventName||"Event"}</span>
         </div>
         <span className="text-xs text-white/60 hidden sm:block">{paid.length} paid · {fmt(paidTotal)}</span>
+        {/* Saved orders dropdown */}
         <div className="relative">
-          <Btn onClick={()=>setShowSaved(v=>!v)} className="bg-white/10 hover:bg-white/20 px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5">
-            Orders{open.length>0&&<span className="bg-amber-400 text-amber-900 text-[10px] rounded-full px-1.5 font-bold">{open.length}</span>}
+          <Btn onClick={()=>setShowSaved(v=>!v)}
+            className="bg-white/10 hover:bg-white/20 px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5">
+            Orders
+            {open.length>0&&<span className="bg-amber-400 text-amber-900 text-[10px] rounded-full px-1.5 font-bold">{open.length}</span>}
           </Btn>
           {showSaved&&(
             <div className="absolute right-0 top-9 bg-white text-gray-800 rounded-2xl shadow-xl w-60 z-50 border border-gray-100 overflow-hidden fade">
@@ -427,86 +542,122 @@ function POS({event,onUpdate,onBack}){
                 <span className="text-xs font-semibold text-gray-600">Open Orders</span>
                 <Btn onClick={()=>setShowSaved(false)} className="text-gray-400 text-xs">✕</Btn>
               </div>
-              {open.length===0?<p className="px-4 py-3 text-xs text-gray-400">No open orders</p>
-                :open.map(o=>(
-                  <Btn key={o.id} onClick={()=>loadOrd(o)} className="w-full px-4 py-2.5 text-left hover:bg-gray-50 border-b border-gray-50 flex justify-between items-center">
-                    <div><div className="text-sm font-medium">{o.name||<span className="text-gray-400 italic text-xs">Unnamed</span>}</div><div className="text-xs text-gray-400">{o.items.length} item{o.items.length!==1?"s":""}</div></div>
+              {open.length===0
+                ? <p className="px-4 py-3 text-xs text-gray-400">No open orders</p>
+                : open.map(o=>(
+                  <Btn key={o.id} onClick={()=>loadOrd(o)}
+                    className="w-full px-4 py-2.5 text-left hover:bg-gray-50 border-b border-gray-50 flex justify-between items-center">
+                    <div>
+                      <div className="text-sm font-medium">{o.name||<span className="text-gray-400 italic text-xs">Unnamed</span>}</div>
+                      <div className="text-xs text-gray-400">{o.items.length} item{o.items.length!==1?"s":""}</div>
+                    </div>
                     <span className="text-sm font-bold text-kaiGreen">{fmt(o.total)}</span>
                   </Btn>
                 ))
               }
               <div className="px-3 py-2 bg-gray-50 border-t">
-                <Btn onClick={()=>{startNew();setShowSaved(false);}} className="w-full bg-kaiBurgundy text-white py-1.5 rounded-lg text-xs font-semibold">+ New Order</Btn>
+                <Btn onClick={()=>{ startNew(); setShowSaved(false); }}
+                  className="w-full bg-kaiBurgundy text-white py-1.5 rounded-lg text-xs font-semibold">
+                  + New Order
+                </Btn>
               </div>
             </div>
           )}
         </div>
       </div>
+
       {/* Category tabs */}
       <div className="flex bg-white border-b border-gray-100 shrink-0">
         {CAT_ORDER.map(c=>(
-          <Btn key={c} onClick={()=>setCat(c)} className={`flex-1 py-2.5 text-xs font-semibold border-b-2 transition-colors ${cat===c?"border-kaiBurgundy text-kaiBurgundy":"border-transparent text-gray-400"}`}>
+          <Btn key={c} onClick={()=>setCat(c)}
+            className={`flex-1 py-2.5 text-xs font-semibold border-b-2 transition-colors ${cat===c?"border-kaiBurgundy text-kaiBurgundy":"border-transparent text-gray-400"}`}>
             {CAT_LABEL[c]}
           </Btn>
         ))}
       </div>
-      {/* POS body */}
-      <div className="pos-layout overflow-hidden flex-1">
-        {/* Menu — FIX: removed "tap to start" hint banner to prevent layout shift mis-hits */}
+
+      {/* Split body — both panels scroll independently via min-h-0 */}
+      <div className="pos-body">
+        {/* Left: menu grid */}
         <div className="overflow-y-auto p-2">
           <div className="grid grid-cols-2 gap-2">
             {catItems.map(def=>(
-              <Btn key={def.id} onClick={()=>addItem(def)} className="bg-white hover:bg-kaiYellow border border-gray-100 rounded-xl p-3 text-left shadow-sm">
+              <Btn key={def.id} onClick={()=>addItem(def)}
+                className="bg-white hover:bg-kaiYellow border border-gray-100 rounded-xl p-3 text-left shadow-sm">
                 <div className="font-semibold text-sm text-gray-800 leading-tight">{def.label}</div>
                 {def.size&&<div className="text-xs text-gray-400 mt-0.5">{def.size}</div>}
-                <div className="text-sm font-bold text-kaiGreen mt-1.5">{def.custom?"Custom":fmt(def.price)}{def.canAlt&&<span className="text-[10px] text-gray-400 font-normal ml-1">+$1 oat</span>}</div>
+                <div className="text-sm font-bold text-kaiGreen mt-1.5">
+                  {def.custom?"Custom":fmt(def.price)}
+                  {def.canAlt&&<span className="text-[10px] text-gray-400 font-normal ml-1">+$1 oat</span>}
+                </div>
               </Btn>
             ))}
           </div>
         </div>
-        {/* Order panel */}
-        <div className="flex flex-col bg-white border-l border-gray-100">
+
+        {/* Right: order panel — flex column, items scroll, footer stays pinned */}
+        <div className="flex flex-col bg-white border-l border-gray-100 min-h-0">
           <div className="px-2 pt-2 pb-1.5 border-b border-gray-50 shrink-0">
-            <input className="w-full border border-gray-200 rounded-lg px-2 py-1 text-xs focus:outline-none" placeholder="Customer name" value={oname} onChange={e=>setOname(e.target.value)}/>
+            <input className="w-full border border-gray-200 rounded-lg px-2 py-1 text-xs focus:outline-none"
+              placeholder="Customer name" value={oname} onChange={e=>setOname(e.target.value)}/>
           </div>
-          <div className="flex-1 overflow-y-auto p-1.5 space-y-1">
-            {items.length===0?<p className="text-xs text-gray-300 text-center pt-6">Tap items to add</p>
-              :items.map(it=>{
-                const def=MENU.find(m=>m.id===it.mid);
-                const bp=def?.custom?(parseFloat(it.cp)||0):(def?.price||0);
-                const lt=(bp+(it.alt?1:0))*it.qty;
-                return(
-                  <div key={it.lid} className="bg-gray-50 rounded-xl p-1.5">
-                    <div className="flex items-start gap-1">
-                      <div className="flex-1 min-w-0">
-                        <div className="text-xs font-semibold text-gray-800 leading-tight truncate">{def?.label}{def?.size?" "+def.size:""}{it.alt&&<span className="text-kaiGreen"> Oat</span>}</div>
-                        {def?.custom&&<input className="w-full border border-gray-200 rounded px-1.5 py-0.5 text-xs mt-0.5" placeholder="$ price" value={it.cp||""} onChange={e=>setItems(prev=>prev.map(i=>i.lid===it.lid?{...i,cp:e.target.value}:i))}/>}
-                        {def?.canAlt&&<Btn onClick={()=>toggleAlt(it.lid)} className={`mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold ${it.alt?"bg-kaiGreen text-white":"bg-gray-200 text-gray-500"}`}>{it.alt?"Oat ✓":"+ Oat"}</Btn>}
-                      </div>
-                      <div className="text-right shrink-0">
-                        <div className="text-xs font-bold text-kaiGreen">{fmt(lt)}</div>
-                        <div className="flex items-center gap-0.5 mt-0.5 justify-end">
-                          <Btn onClick={()=>updQty(it.lid,-1)} className="w-5 h-5 bg-gray-200 rounded text-xs font-bold text-gray-600 flex items-center justify-center">−</Btn>
-                          <span className="text-xs font-bold w-4 text-center">{it.qty}</span>
-                          <Btn onClick={()=>updQty(it.lid,1)} className="w-5 h-5 bg-gray-200 rounded text-xs font-bold text-gray-600 flex items-center justify-center">+</Btn>
+          {/* Scrollable items list */}
+          <div className="flex-1 overflow-y-auto min-h-0 p-1.5 space-y-1">
+            {items.length===0
+              ? <p className="text-xs text-gray-300 text-center pt-6">Tap items to add</p>
+              : items.map(it=>{
+                  const def=MENU.find(m=>m.id===it.mid);
+                  const bp=def?.custom?(parseFloat(it.cp)||0):(def?.price||0);
+                  const lt=(bp+(it.alt?1:0))*it.qty;
+                  return(
+                    <div key={it.lid} className="bg-gray-50 rounded-xl p-1.5">
+                      <div className="flex items-start gap-1">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs font-semibold text-gray-800 leading-tight truncate">
+                            {def?.label}{def?.size?" "+def.size:""}
+                            {it.alt&&<span className="text-kaiGreen"> Oat</span>}
+                          </div>
+                          {def?.custom&&(
+                            <input className="w-full border border-gray-200 rounded px-1.5 py-0.5 text-xs mt-0.5"
+                              placeholder="$ price" value={it.cp||""}
+                              onChange={e=>setItems(prev=>prev.map(i=>i.lid===it.lid?{...i,cp:e.target.value}:i))}/>
+                          )}
+                          {def?.canAlt&&(
+                            <Btn onClick={()=>toggleAlt(it.lid)}
+                              className={`mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold ${it.alt?"bg-kaiGreen text-white":"bg-gray-200 text-gray-500"}`}>
+                              {it.alt?"Oat ✓":"+ Oat"}
+                            </Btn>
+                          )}
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="text-xs font-bold text-kaiGreen">{fmt(lt)}</div>
+                          <div className="flex items-center gap-0.5 mt-0.5 justify-end">
+                            <Btn onClick={()=>updQty(it.lid,-1)} className="w-5 h-5 bg-gray-200 rounded text-xs font-bold text-gray-600 flex items-center justify-center">−</Btn>
+                            <span className="text-xs font-bold w-4 text-center">{it.qty}</span>
+                            <Btn onClick={()=>updQty(it.lid,1)} className="w-5 h-5 bg-gray-200 rounded text-xs font-bold text-gray-600 flex items-center justify-center">+</Btn>
+                          </div>
                         </div>
                       </div>
                     </div>
-                  </div>
-                );
-              })
+                  );
+                })
             }
           </div>
+          {/* Pinned footer: total + action buttons */}
           <div className="border-t border-gray-100 p-2 space-y-1.5 shrink-0 safe-b">
             <div className="flex justify-between items-center px-1">
               <span className="text-xs text-gray-500">Total</span>
               <span className="text-xl font-serif font-bold text-kaiBurgundy">{fmt(total)}</span>
             </div>
             <Btn onClick={saveOrd} className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 py-1.5 rounded-xl text-xs font-semibold">Save</Btn>
-            <Btn onClick={()=>items.length?setPayModal(true):toast2("Add items first","bg-kaiBurgundy")} className="w-full bg-kaiGreen hover:bg-green-700 text-white py-2 rounded-xl text-sm font-bold">Pay →</Btn>
+            <Btn onClick={()=>items.length?setPayModal(true):toast2("Add items first","bg-kaiBurgundy")}
+              className="w-full bg-kaiGreen hover:bg-green-700 text-white py-2 rounded-xl text-sm font-bold">
+              Pay →
+            </Btn>
           </div>
         </div>
       </div>
+
       {/* Payment modal */}
       {payModal&&(
         <div className="fixed inset-0 bg-black/60 flex items-end justify-center z-50 p-4">
@@ -525,29 +676,45 @@ function POS({event,onUpdate,onBack}){
   );
 }
 
-// ─── ORDER HISTORY ────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════
+// ORDER HISTORY (collapsible, used in EventScreen)
+// ═══════════════════════════════════════════════════════
 function OrderHistory({orders}){
   const[exp,setExp]=useState(null);
-  if(!orders?.length)return null;
+  if(!orders?.length) return null;
   return(
     <div className="space-y-1.5">
       {[...orders].reverse().map(o=>(
         <div key={o.id} className="border border-gray-100 rounded-xl overflow-hidden">
-          <Btn onClick={()=>setExp(exp===o.id?null:o.id)} className="w-full px-3 py-2.5 flex items-center gap-2 text-left hover:bg-gray-50">
+          <Btn onClick={()=>setExp(exp===o.id?null:o.id)}
+            className="w-full px-3 py-2.5 flex items-center gap-2 text-left hover:bg-gray-50">
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-gray-800 truncate">{o.name||<span className="text-gray-400 italic text-xs">Unnamed</span>}</div>
-              <div className="text-xs text-gray-400">{o.items?.length} item{o.items?.length!==1?"s":""} · {o.status==="paid"?o.payMethod:"open"}</div>
+              <div className="text-sm font-medium text-gray-800 truncate">
+                {o.name||<span className="text-gray-400 italic text-xs">Unnamed</span>}
+              </div>
+              <div className="text-xs text-gray-400">
+                {o.items?.length} item{o.items?.length!==1?"s":""} · {o.status==="paid"?o.payMethod:"open"}
+              </div>
             </div>
-            <span className={`text-xs px-2 py-0.5 rounded-full font-semibold shrink-0 ${o.status==="paid"?"bg-kaiGreen/10 text-kaiGreen":"bg-amber-100 text-amber-700"}`}>{o.status}</span>
+            <span className={`text-xs px-2 py-0.5 rounded-full font-semibold shrink-0 ${o.status==="paid"?"bg-kaiGreen/10 text-kaiGreen":"bg-amber-100 text-amber-700"}`}>
+              {o.status}
+            </span>
             <span className="text-sm font-bold text-kaiBurgundy shrink-0">{fmt(o.total)}</span>
-            <svg className={`h-4 w-4 text-gray-300 shrink-0 transition-transform ${exp===o.id?"rotate-180":""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7"/></svg>
+            <svg className={`h-4 w-4 text-gray-300 shrink-0 transition-transform ${exp===o.id?"rotate-180":""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7"/>
+            </svg>
           </Btn>
           {exp===o.id&&(
             <div className="px-3 pb-3 bg-gray-50 border-t border-gray-100">
               {o.items?.map((it,i)=>{
                 const def=MENU.find(m=>m.id===it.mid);
                 const bp=def?.custom?(parseFloat(it.cp)||0):(def?.price||0);
-                return<div key={i} className="flex justify-between text-xs py-1 border-b border-gray-100 last:border-0"><span className="text-gray-700">{def?.label}{def?.size?" "+def.size:""}{it.alt?" (Oat)":""} ×{it.qty}</span><span className="font-medium">{fmt((bp+(it.alt?1:0))*it.qty)}</span></div>;
+                return(
+                  <div key={i} className="flex justify-between text-xs py-1 border-b border-gray-100 last:border-0">
+                    <span className="text-gray-700">{def?.label}{def?.size?" "+def.size:""}{it.alt?" (Oat)":""} ×{it.qty}</span>
+                    <span className="font-medium">{fmt((bp+(it.alt?1:0))*it.qty)}</span>
+                  </div>
+                );
               })}
             </div>
           )}
@@ -557,110 +724,136 @@ function OrderHistory({orders}){
   );
 }
 
-// ─── EVENT / SALES ────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════
+// EVENT / SALES SCREEN
+// Three independent sections: Sales, Payments, Stock.
+// Editing one never cascades to another.
+// ═══════════════════════════════════════════════════════
 function EventScreen({webAppUrl,onBack}){
-  const[ev,setEv]=useState(()=>lsGet(EV_KEY)||blankEv());
-  const[posOpen,setPosOpen]=useState(false);
-  const[showSum,setShowSum]=useState(false);
-  const[loading,setLoading]=useState(false);
-  const[toast,setToast]=useState(null);
-  const[copied,setCopied]=useState(false);
-  const[editSales,setEditSales]=useState(false);
-  const[editStock,setEditStock]=useState(false);
-  const[editMoney,setEditMoney]=useState(false);
+  const[ev,setEv]           = useState(()=>lsGet(EV_KEY)||blankEv());
+  const[posOpen,setPosOpen] = useState(false);
+  const[showSum,setShowSum] = useState(false);
+  const[loading,setLoading] = useState(false);
+  const[toast,setToast]     = useState(null);
+  const[copied,setCopied]   = useState(false);
+  const[editSales,setEditSales] = useState(false);
+  const[editStock,setEditStock] = useState(false);
+  const[editMoney,setEditMoney] = useState(false);
 
   useEffect(()=>{ lsSet(EV_KEY,ev); },[ev]);
-  const upd=(k,v)=>setEv(p=>({...p,[k]:v}));
-  const toast2=(m,c="bg-kaiGreen")=>{setToast({m,c});setTimeout(()=>setToast(null),5000);};
+  const upd   = (k,v) => setEv(p=>({...p,[k]:v}));
+  const toast2 = (m,c="bg-kaiGreen") => { setToast({m,c}); setTimeout(()=>setToast(null),5000); };
 
-  const sales=effSales(ev), stock=effStock(ev);
-  const cash=effCash(ev), eftpos=effEftpos(ev), total=cash+eftpos;
-  const paidOrders=(ev.orders||[]).filter(o=>o.status==="paid");
+  // Resolved display values
+  const sales  = effSales(ev);
+  const stock  = effStock(ev);
+  const cash   = effCash(ev);
+  const eftpos = effEftpos(ev);
+  const total  = cash+eftpos;
+  const paidOrders = (ev.orders||[]).filter(o=>o.status==="paid");
 
-  // ── Sales edit handler ───────────────────────────────
-  // Priority: POS → sales edit (locks sales, recalcs stock + implied total)
-  // FIX: sales edit now also derives implied cash total and pre-fills it
-  // unless the user has already manually edited the money fields.
-  const handleSalesEdit=(prod,rawVal)=>{
-    // FIX leading-zero: treat empty string as 0, parse clean
-    const qty=rawVal===""?0:parseInt(rawVal)||0;
-    const ns={...(ev.salesOverride||sales),[prod]:qty};
-    const newStock=(ev.stockLocked&&ev.stockOverride)?ev.stockOverride:stockFromSales(ns);
-    // Derive implied revenue from updated sales → pre-fill totals unless already manually overridden
-    const impliedRev=revenueFromSales(ns);
-    setEv(p=>({
-      ...p,
-      salesLocked:true, salesOverride:ns,
-      stockLocked:p.stockLocked&&!!p.stockOverride,
-      stockOverride:(p.stockLocked&&p.stockOverride)?p.stockOverride:newStock,
-      // Only update money fields if they haven't been manually set
-      cashSales:hasV(p.cashSales)?p.cashSales:String(impliedRev.toFixed(2)),
-      eftposSales:hasV(p.eftposSales)?p.eftposSales:"0.00",
-    }));
+  // ── Sales edit: locks sales only. Stock and payments untouched. ──
+  const handleSalesEdit = (prod, rawVal) => {
+    const qty = rawVal===""?0:parseInt(rawVal)||0;
+    const ns  = {...(ev.salesOverride||sales), [prod]:qty};
+    setEv(p=>({...p, salesLocked:true, salesOverride:ns}));
   };
-  const resetSales=()=>setEv(p=>({...p,salesLocked:false,salesOverride:null,stockLocked:false,stockOverride:null,cashSales:"",eftposSales:""}));
+  const resetSales = () => setEv(p=>({...p, salesLocked:false, salesOverride:null}));
 
-  // ── Stock edit handler ───────────────────────────────
-  // FIX: step by 1.0, value rounded to 1dp, no leading zero
-  const handleStockEdit=(item,rawVal)=>{
-    const ns={...(ev.stockOverride||stock),[item]:rawVal===""?0:parseFloat(rawVal)||0};
-    upd("stockOverride",ns); upd("stockLocked",true);
+  // ── Stock edit: locks stock only. Sales and payments untouched. ──
+  const handleStockEdit = (item, rawVal) => {
+    const ns = {...(ev.stockOverride||stock), [item]: rawVal===""?0:parseFloat(rawVal)||0};
+    setEv(p=>({...p, stockLocked:true, stockOverride:ns}));
   };
-  // On blur: round to 1dp
-  const blurStock=(item)=>{
-    const ns={...(ev.stockOverride||stock)};
-    ns[item]=r1(ns[item]);
-    upd("stockOverride",ns);
+  const blurStock = item => {
+    const cur = ev.stockOverride?.[item] ?? stock[item] ?? 0;
+    const ns  = {...(ev.stockOverride||stock), [item]: r1(cur)};
+    setEv(p=>({...p, stockOverride:ns}));
   };
-  const resetStock=()=>setEv(p=>({...p,stockLocked:false,stockOverride:null}));
+  const stepStock = (item, delta) => {
+    const cur = ev.stockOverride?.[item] ?? stock[item] ?? 0;
+    handleStockEdit(item, r1(parseFloat(cur)+delta));
+  };
+  const resetStock = () => setEv(p=>({...p, stockLocked:false, stockOverride:null}));
 
-  const doClear=()=>{ if(window.confirm("Clear all event data and return home?")){lsDel(EV_KEY);setEv(blankEv());onBack();} };
+  // ── Clear and go home ────────────────────────────────
+  const doClear = () => {
+    if(window.confirm("Clear all event data and return home?")){
+      lsDel(EV_KEY); onBack();
+    }
+  };
 
-  // ── Submit ───────────────────────────────────────────
-  // FIX: after success navigate back to home via onBack()
-  const doSubmit=async()=>{
-    if(!ev.date||!ev.completedBy||!ev.eventName){toast2("Date, Event Name and Completed By required","bg-kaiBurgundy");return;}
-    if(!webAppUrl){toast2("No Web App URL set — open Settings to configure","bg-kaiBurgundy");return;}
-    if(!online()){toast2("No internet connection. Your data is saved locally. Please resubmit when back online.","bg-amber-600");return;}
+  // ── Submit report ─────────────────────────────────────
+  const doSubmit = async () => {
+    if(!ev.date||!ev.completedBy||!ev.eventName){
+      toast2("Date, Event Name and Completed By required","bg-kaiBurgundy"); return;
+    }
+    if(!webAppUrl){
+      toast2("No Web App URL set — open Settings to configure","bg-kaiBurgundy"); return;
+    }
+    if(!navigator.onLine){
+      toast2("No internet connection. Data is saved — resubmit when back online.","bg-amber-600"); return;
+    }
     setLoading(true);
     try{
       const fd=new FormData();
-      fd.append("action","salesReport"); fd.append("date",ev.date);
-      fd.append("eventName",ev.eventName); fd.append("location",ev.location||"");
-      fd.append("completedBy",ev.completedBy); fd.append("timestamp",new Date().toISOString());
-      (ev.staffRows||[]).forEach(r=>{fd.append("staffName[]",r.staffName);fd.append("staffStart[]",r.startTime||"");fd.append("staffEnd[]",r.endTime||"");});
-      Object.entries(sales).filter(([,v])=>v>0).forEach(([k,v])=>{fd.append("saleProduct[]",k);fd.append("saleQty[]",v);});
-      fd.append("cashSales",cash.toFixed(2)); fd.append("eftposSales",eftpos.toFixed(2)); fd.append("totalSales",total.toFixed(2));
-      Object.entries(stock).forEach(([k,v])=>{fd.append("stockItem[]",k);fd.append("stockQty[]",v);});
-      (ev.fridgeReadings||[]).forEach(r=>{fd.append("fridgeTime[]",r.time);fd.append("fridgeTemp[]",r.temp);});
-      fd.append("issues",ev.issues||""); fd.append("notes",ev.notes||"");
-      const res=await fetch(webAppUrl,{method:"POST",body:fd});
-      const j=await res.json();
-      if(!j.success)throw new Error(j.error||"Unknown error");
-      // FIX: clear event, close modal, go home
-      setShowSum(false);
+      fd.append("action","salesReport");
+      fd.append("date",ev.date);
+      fd.append("eventName",ev.eventName);
+      fd.append("location",ev.location||"");
+      fd.append("completedBy",ev.completedBy);
+      fd.append("timestamp",new Date().toISOString());
+      (ev.staffRows||[]).forEach(r=>{
+        fd.append("staffName[]",r.staffName);
+        fd.append("staffStart[]",r.startTime||"");
+        fd.append("staffEnd[]",r.endTime||"");
+      });
+      Object.entries(sales).filter(([,v])=>v>0).forEach(([k,v])=>{
+        fd.append("saleProduct[]",k); fd.append("saleQty[]",v);
+      });
+      fd.append("cashSales",  cash.toFixed(2));
+      fd.append("eftposSales",eftpos.toFixed(2));
+      fd.append("totalSales", total.toFixed(2));
+      Object.entries(stock).forEach(([k,v])=>{
+        fd.append("stockItem[]",k); fd.append("stockQty[]",v);
+      });
+      (ev.fridgeReadings||[]).forEach(r=>{
+        fd.append("fridgeTime[]",r.time); fd.append("fridgeTemp[]",r.temp);
+      });
+      fd.append("issues",ev.issues||"");
+      fd.append("notes", ev.notes||"");
+
+      const res = await fetch(webAppUrl,{method:"POST",body:fd});
+      const j   = await res.json();
+      if(!j.success) throw new Error(j.error||"Unknown error");
+      // Success: clear local state and go home
       lsDel(EV_KEY);
       onBack();
     }catch(err){
-      if(!online()) toast2("Submission failed — no connection. Data saved locally. Resubmit when online.","bg-amber-600");
-      else toast2("Submission failed: "+err.message+". Data is still saved — try again.","bg-kaiBurgundy");
-    }finally{setLoading(false);}
+      if(!navigator.onLine)
+        toast2("Submission failed — no connection. Data saved. Resubmit when online.","bg-amber-600");
+      else
+        toast2(`Submission failed: ${err.message}. Data is still saved — try again.`,"bg-kaiBurgundy");
+    }finally{ setLoading(false); }
   };
 
-  if(posOpen)return<POS event={ev} onUpdate={e=>{setEv(e);lsSet(EV_KEY,e);}} onBack={()=>setPosOpen(false)}/>;
+  if(posOpen) return(
+    <POS event={ev} onUpdate={e=>{setEv(e);lsSet(EV_KEY,e);}} onBack={()=>setPosOpen(false)}/>
+  );
 
-  const addStaff=()=>upd("staffRows",[...(ev.staffRows||[]),{staffName:STAFF[0],startTime:"",endTime:""}]);
-  const rmStaff=i=>upd("staffRows",(ev.staffRows||[]).filter((_,j)=>j!==i));
-  const addFridge=()=>upd("fridgeReadings",[...(ev.fridgeReadings||[]),{time:nowT(),temp:""}]);
-  const rmFridge=i=>upd("fridgeReadings",(ev.fridgeReadings||[]).filter((_,j)=>j!==i));
+  const addStaff  = () => upd("staffRows",[...(ev.staffRows||[]),{staffName:STAFF[0],startTime:"",endTime:""}]);
+  const rmStaff   = i  => upd("staffRows",(ev.staffRows||[]).filter((_,j)=>j!==i));
+  const addFridge = () => upd("fridgeReadings",[...(ev.fridgeReadings||[]),{time:nowT(),temp:""}]);
+  const rmFridge  = i  => upd("fridgeReadings",(ev.fridgeReadings||[]).filter((_,j)=>j!==i));
 
   return(
-    <div className="max-w-lg mx-auto p-4 pb-12 md:p-8">
+    <div className="min-h-screen flex flex-col">
       {toast&&<Toast msg={toast.m} color={toast.c}/>}
       {copied&&<Toast msg="✓ Copied" color="bg-kaiBlue"/>}
       <Header sub={ev.eventName||"Sales Report"} onBack={onBack}/>
 
-      <div className="space-y-4">
+      <div className="flex-1 w-full max-w-lg mx-auto px-4 pb-12 space-y-4">
+
         {/* Event details */}
         <Card title="Event Details">
           <div className="grid grid-cols-2 gap-3">
@@ -671,14 +864,18 @@ function EventScreen({webAppUrl,onBack}){
           </div>
         </Card>
 
-        {/* POS */}
+        {/* POS entry point */}
         <div className="bg-coffeeBrown text-white rounded-2xl shadow p-4 flex items-center gap-4">
           <span className="text-3xl">☕</span>
           <div className="flex-1 min-w-0">
             <div className="font-serif font-bold">Point of Sale</div>
-            <div className="text-xs text-white/60 mt-0.5">{paidOrders.length} paid · {fmt(paidOrders.reduce((s,o)=>s+o.total,0))} · {(ev.orders||[]).filter(o=>o.status==="saved").length} open</div>
+            <div className="text-xs text-white/60 mt-0.5">
+              {paidOrders.length} paid · {fmt(paidOrders.reduce((s,o)=>s+o.total,0))} · {(ev.orders||[]).filter(o=>o.status==="saved").length} open
+            </div>
           </div>
-          <Btn onClick={()=>setPosOpen(true)} className="bg-white text-coffeeBrown hover:bg-kaiYellow px-4 py-2 rounded-xl font-bold text-sm shadow shrink-0">Enter POS →</Btn>
+          <Btn onClick={()=>setPosOpen(true)} className="bg-white text-coffeeBrown hover:bg-kaiYellow px-4 py-2 rounded-xl font-bold text-sm shadow shrink-0">
+            Enter POS →
+          </Btn>
         </div>
 
         {/* Order history */}
@@ -688,100 +885,120 @@ function EventScreen({webAppUrl,onBack}){
           </Card>
         )}
 
-        {/* Sales summary */}
+        {/* ── SALES (independent) ── */}
         <Card title={`Sales${ev.salesLocked?" (edited)":""}`}
-          action={<div className="flex gap-2">{ev.salesLocked&&<Btn onClick={resetSales} className="text-xs text-gray-400 hover:text-red-400 underline">Reset</Btn>}<Btn onClick={()=>setEditSales(v=>!v)} className="text-xs text-kaiGreen font-semibold hover:underline">{editSales?"Done":"Edit"}</Btn></div>}>
+          action={
+            <div className="flex gap-2">
+              {ev.salesLocked&&<Btn onClick={resetSales} className="text-xs text-gray-400 hover:text-red-400 underline">Reset</Btn>}
+              <Btn onClick={()=>setEditSales(v=>!v)} className="text-xs text-kaiGreen font-semibold hover:underline">
+                {editSales?"Done":"Edit"}
+              </Btn>
+            </div>
+          }>
           {editSales?(
             <div className="space-y-2">
-              <p className="text-xs text-gray-400">Editing sales recalculates stock and updates suggested totals</p>
+              <p className="text-xs text-gray-400">Sales, payment totals, and stock are each independent. Editing one won't change the others.</p>
               <div className="grid grid-cols-2 gap-x-3 gap-y-2">
                 {ALL_PRODUCTS.map(prod=>(
                   <div key={prod} className="flex items-center gap-2">
                     <span className="text-xs text-gray-700 flex-1 min-w-0 truncate">{prod}</span>
-                    {/* FIX leading zero: onFocus clear if value is 0; controlled as string */}
                     <input type="number" min="0" step="1" placeholder="0"
-                      className="w-16 border border-gray-200 rounded-lg px-2 py-1 text-xs text-right"
+                      className="w-16 border border-gray-200 rounded-lg px-2 py-1 text-xs text-right bg-white"
                       value={sales[prod]||""}
-                      onFocus={e=>{if(e.target.value==="0")e.target.value="";}}
+                      onFocus={e=>{ if(e.target.value==="0") e.target.value=""; }}
                       onChange={e=>handleSalesEdit(prod,e.target.value)}/>
                   </div>
                 ))}
               </div>
             </div>
           ):(
-            <div>
-              {!Object.values(sales).some(v=>v>0)?<p className="text-sm text-gray-400 text-center py-2">No sales yet — use POS or Edit</p>
-                :<div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+            !Object.values(sales).some(v=>v>0)
+              ? <p className="text-sm text-gray-400 text-center py-2">No sales yet — use POS or Edit</p>
+              : <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
                   {Object.entries(sales).filter(([,v])=>v>0).map(([k,v])=>(
                     <div key={k} className="flex justify-between text-xs py-0.5">
                       <span className="text-gray-600">{k}</span><span className="font-semibold">{v}</span>
                     </div>
                   ))}
                 </div>
-              }
+          )}
+        </Card>
 
-              {/* Cash / Eftpos / Total */}
-              <div className="mt-3 pt-3 border-t border-gray-100">
-                {editMoney?(
-                  <div className="space-y-2">
-                    <div className="grid grid-cols-3 gap-2">
-                      <Fld label="Cash ($)">
-                        <input type="number" step="0.01" placeholder="0.00" className={INP}
-                          value={ev.cashSales}
-                          onFocus={e=>{if(e.target.value==="0"||e.target.value==="0.00")e.target.value="";}}
-                          onChange={e=>upd("cashSales",e.target.value)}/>
-                      </Fld>
-                      <Fld label="Eftpos ($)">
-                        <input type="number" step="0.01" placeholder="0.00" className={INP}
-                          value={ev.eftposSales}
-                          onFocus={e=>{if(e.target.value==="0"||e.target.value==="0.00")e.target.value="";}}
-                          onChange={e=>upd("eftposSales",e.target.value)}/>
-                      </Fld>
-                      <Fld label="Total"><div className={`${INP} bg-gray-50 text-kaiGreen font-bold`}>{fmt(total)}</div></Fld>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      {(hasV(ev.cashSales)||hasV(ev.eftposSales))&&<Btn onClick={()=>{upd("cashSales","");upd("eftposSales","");}} className="text-xs text-gray-400 hover:text-red-400 underline">Reset to POS</Btn>}
-                      <Btn onClick={()=>setEditMoney(false)} className="text-xs text-kaiGreen font-semibold ml-auto">Done</Btn>
-                    </div>
-                  </div>
-                ):(
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-xs text-gray-400">Cash <span className="text-gray-700 font-semibold">{fmt(cash)}</span> · Eftpos <span className="text-gray-700 font-semibold">{fmt(eftpos)}</span></div>
-                      <div className="text-lg font-serif font-bold text-kaiGreen">{fmt(total)} total</div>
-                    </div>
-                    <Btn onClick={()=>setEditMoney(true)} className="text-xs text-kaiGreen font-semibold hover:underline">Edit</Btn>
-                  </div>
-                )}
+        {/* ── PAYMENT TOTALS (independent) ── */}
+        <Card title="Payment Totals">
+          {editMoney?(
+            <div className="space-y-2">
+              <p className="text-xs text-gray-400">Sales, payment totals, and stock are each independent. Editing one won't change the others.</p>
+              <div className="grid grid-cols-3 gap-2">
+                <Fld label="Cash ($)">
+                  <input type="number" step="0.01" placeholder="0.00" className={INP}
+                    value={ev.cashSales}
+                    onFocus={e=>{ if(e.target.value==="0"||e.target.value==="0.00") e.target.value=""; }}
+                    onChange={e=>upd("cashSales",e.target.value)}/>
+                </Fld>
+                <Fld label="Eftpos ($)">
+                  <input type="number" step="0.01" placeholder="0.00" className={INP}
+                    value={ev.eftposSales}
+                    onFocus={e=>{ if(e.target.value==="0"||e.target.value==="0.00") e.target.value=""; }}
+                    onChange={e=>upd("eftposSales",e.target.value)}/>
+                </Fld>
+                <Fld label="Total">
+                  <div className={`${INP} bg-gray-50 text-kaiGreen font-bold text-center`}>{fmt(total)}</div>
+                </Fld>
               </div>
+              <div className="flex justify-between items-center">
+                {(hasV(ev.cashSales)||hasV(ev.eftposSales))&&(
+                  <Btn onClick={()=>{ upd("cashSales",""); upd("eftposSales",""); }}
+                    className="text-xs text-gray-400 hover:text-red-400 underline">Reset to POS</Btn>
+                )}
+                <Btn onClick={()=>setEditMoney(false)} className="text-xs text-kaiGreen font-semibold ml-auto">Done</Btn>
+              </div>
+            </div>
+          ):(
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-xs text-gray-400">
+                  Cash <span className="text-gray-700 font-semibold">{fmt(cash)}</span>
+                  {" · "}
+                  Eftpos <span className="text-gray-700 font-semibold">{fmt(eftpos)}</span>
+                </div>
+                <div className="text-lg font-serif font-bold text-kaiGreen">{fmt(total)} total</div>
+              </div>
+              <Btn onClick={()=>setEditMoney(true)} className="text-xs text-kaiGreen font-semibold hover:underline">Edit</Btn>
             </div>
           )}
         </Card>
 
-        {/* Stock used */}
+        {/* ── STOCK USED (independent) ── */}
         <Card title={`Stock Used${ev.stockLocked?" (edited)":""}`}
-          action={<div className="flex gap-2">{ev.stockLocked&&<Btn onClick={resetStock} className="text-xs text-gray-400 hover:text-red-400 underline">Reset</Btn>}<Btn onClick={()=>setEditStock(v=>!v)} className="text-xs text-kaiGreen font-semibold hover:underline">{editStock?"Done":"Edit"}</Btn></div>}>
+          action={
+            <div className="flex gap-2">
+              {ev.stockLocked&&<Btn onClick={resetStock} className="text-xs text-gray-400 hover:text-red-400 underline">Reset</Btn>}
+              <Btn onClick={()=>setEditStock(v=>!v)} className="text-xs text-kaiGreen font-semibold hover:underline">
+                {editStock?"Done":"Edit"}
+              </Btn>
+            </div>
+          }>
           {editStock?(
             <div className="space-y-2">
-              <p className="text-xs text-gray-400">Manual stock edits lock stock — won't recalculate if sales change</p>
+              <p className="text-xs text-gray-400">Sales, payment totals, and stock are each independent. Editing one won't change the others.</p>
               <div className="grid grid-cols-2 gap-x-3 gap-y-2">
                 {STOCK_ITEMS.map(item=>{
-                  const val=ev.stockOverride?.[item]??stock[item]??0;
+                  const val = ev.stockOverride?.[item] ?? stock[item] ?? 0;
                   return(
-                    <div key={item} className="flex items-center gap-2">
+                    <div key={item} className="flex items-center gap-1.5">
                       <span className="text-xs text-gray-700 flex-1 min-w-0 truncate">{item}</span>
-                      <div className="flex items-center gap-0.5">
-                        {/* FIX: step buttons move by 1.0 */}
-                        <Btn onClick={()=>handleStockEdit(item,r1((ev.stockOverride?.[item]??stock[item]??0)-1))}
-                          className="w-6 h-6 bg-gray-100 hover:bg-gray-200 rounded text-xs font-bold text-gray-600 flex items-center justify-center shrink-0">−</Btn>
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        <Btn onClick={()=>stepStock(item,-1)}
+                          className="w-6 h-6 bg-gray-100 hover:bg-gray-200 rounded text-xs font-bold text-gray-600 flex items-center justify-center">−</Btn>
                         <input type="number" step="0.1" placeholder="0"
-                          className="w-14 border border-gray-200 rounded-lg px-1.5 py-1 text-xs text-center"
-                          value={val==0?"":val}
-                          onFocus={e=>{if(e.target.value==="0")e.target.value="";}}
+                          className="w-14 border border-gray-200 rounded-lg px-1.5 py-1 text-xs text-center bg-white"
+                          value={val===0?"":val}
+                          onFocus={e=>{ if(e.target.value==="0") e.target.value=""; }}
                           onChange={e=>handleStockEdit(item,e.target.value)}
                           onBlur={()=>blurStock(item)}/>
-                        <Btn onClick={()=>handleStockEdit(item,r1((ev.stockOverride?.[item]??stock[item]??0)+1))}
-                          className="w-6 h-6 bg-gray-100 hover:bg-gray-200 rounded text-xs font-bold text-gray-600 flex items-center justify-center shrink-0">+</Btn>
+                        <Btn onClick={()=>stepStock(item,+1)}
+                          className="w-6 h-6 bg-gray-100 hover:bg-gray-200 rounded text-xs font-bold text-gray-600 flex items-center justify-center">+</Btn>
                       </div>
                     </div>
                   );
@@ -789,44 +1006,62 @@ function EventScreen({webAppUrl,onBack}){
               </div>
             </div>
           ):(
-            Object.keys(stock).length===0?<p className="text-sm text-gray-400 text-center py-2">Auto-calculated from sales</p>
-            :<div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
-              {/* FIX: display all stock values at 1dp */}
-              {STOCK_ITEMS.filter(k=>stock[k]>0).map(k=>(
-                <div key={k} className="flex justify-between text-xs py-0.5"><span className="text-gray-600">{k}</span><span className="font-semibold">{r1(stock[k])}</span></div>
-              ))}
-            </div>
+            Object.keys(stock).length===0
+              ? <p className="text-sm text-gray-400 text-center py-2">Auto-calculated from sales</p>
+              : <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+                  {STOCK_ITEMS.filter(k=>stock[k]>0).map(k=>(
+                    <div key={k} className="flex justify-between text-xs py-0.5">
+                      <span className="text-gray-600">{k}</span>
+                      <span className="font-semibold">{r1(stock[k])}</span>
+                    </div>
+                  ))}
+                </div>
           )}
         </Card>
 
-        {/* Staff — FIX: removed estimated cost line */}
+        {/* Staff */}
         <Card title="Staff" action={<AddBtn onClick={addStaff} label="+ Add"/>}>
           {!(ev.staffRows?.length)&&<p className="text-xs text-gray-400 text-center py-1">No staff added</p>}
           {(ev.staffRows||[]).map((r,i)=>(
             <div key={i} className="bg-kaiGreen/5 p-3 rounded-xl relative mb-2">
               <RmBtn onClick={()=>rmStaff(i)}/>
               <div className="grid grid-cols-3 gap-2">
-                <select className={INP} value={r.staffName} onChange={e=>upd("staffRows",(ev.staffRows||[]).map((x,j)=>j===i?{...x,staffName:e.target.value}:x))}>
+                <select className={INP} value={r.staffName}
+                  onChange={e=>upd("staffRows",(ev.staffRows||[]).map((x,j)=>j===i?{...x,staffName:e.target.value}:x))}>
                   {STAFF.map(s=><option key={s}>{s}</option>)}
                 </select>
-                <div><span className="text-[10px] text-gray-400 block mb-1">Start</span>
-                  <input type="time" className={INP} value={r.startTime} onChange={e=>upd("staffRows",(ev.staffRows||[]).map((x,j)=>j===i?{...x,startTime:e.target.value}:x))}/></div>
-                <div><span className="text-[10px] text-gray-400 block mb-1">End</span>
-                  <input type="time" className={INP} value={r.endTime} onChange={e=>upd("staffRows",(ev.staffRows||[]).map((x,j)=>j===i?{...x,endTime:e.target.value}:x))}/></div>
+                <div>
+                  <span className="text-[10px] text-gray-400 block mb-1">Start</span>
+                  <input type="time" className={INP} value={r.startTime}
+                    onChange={e=>upd("staffRows",(ev.staffRows||[]).map((x,j)=>j===i?{...x,startTime:e.target.value}:x))}/>
+                </div>
+                <div>
+                  <span className="text-[10px] text-gray-400 block mb-1">End</span>
+                  <input type="time" className={INP} value={r.endTime}
+                    onChange={e=>upd("staffRows",(ev.staffRows||[]).map((x,j)=>j===i?{...x,endTime:e.target.value}:x))}/>
+                </div>
               </div>
             </div>
           ))}
         </Card>
 
-        {/* Fridge */}
+        {/* Fridge temperatures */}
         <Card title="Fridge Temperature" action={<AddBtn onClick={addFridge} label="+ Reading"/>}>
           {!(ev.fridgeReadings?.length)&&<p className="text-xs text-gray-400 text-center py-1">No readings yet</p>}
           {(ev.fridgeReadings||[]).map((r,i)=>(
             <div key={i} className="bg-blue-50 p-3 rounded-xl relative mb-2">
               <RmBtn onClick={()=>rmFridge(i)}/>
               <div className="grid grid-cols-2 gap-3">
-                <div><span className="text-[10px] text-gray-400 block mb-1">Time</span><input type="time" className={INP} value={r.time} onChange={e=>upd("fridgeReadings",(ev.fridgeReadings||[]).map((x,j)=>j===i?{...x,time:e.target.value}:x))}/></div>
-                <div><span className="text-[10px] text-gray-400 block mb-1">Temp (°C)</span><input type="number" step="0.1" placeholder="e.g. 4.0" className={INP} value={r.temp} onChange={e=>upd("fridgeReadings",(ev.fridgeReadings||[]).map((x,j)=>j===i?{...x,temp:e.target.value}:x))}/></div>
+                <div>
+                  <span className="text-[10px] text-gray-400 block mb-1">Time</span>
+                  <input type="time" className={INP} value={r.time}
+                    onChange={e=>upd("fridgeReadings",(ev.fridgeReadings||[]).map((x,j)=>j===i?{...x,time:e.target.value}:x))}/>
+                </div>
+                <div>
+                  <span className="text-[10px] text-gray-400 block mb-1">Temp (°C)</span>
+                  <input type="number" step="0.1" placeholder="e.g. 4.0" className={INP} value={r.temp}
+                    onChange={e=>upd("fridgeReadings",(ev.fridgeReadings||[]).map((x,j)=>j===i?{...x,temp:e.target.value}:x))}/>
+                </div>
               </div>
             </div>
           ))}
@@ -836,19 +1071,24 @@ function EventScreen({webAppUrl,onBack}){
         <Card title="Notes">
           <div className="space-y-3">
             <Fld label="Issues (equipment, water, power, etc.)">
-              <textarea className={`${INP} h-20 resize-none`} placeholder="e.g. No issues / Water pump slow / Power outage at 2pm"
+              <textarea className={`${INP} h-20 resize-none`}
+                placeholder="e.g. No issues / Water pump slow / Power outage at 2pm"
                 value={ev.issues||""} onChange={e=>upd("issues",e.target.value)}/>
             </Fld>
             <Fld label="General Notes">
               <textarea className={`${INP} h-28 resize-none`}
-                placeholder={"Attendance & crowd size · Busy periods · LegaSea email signups · What went well · Feedback · Any other observations"}
+                placeholder="Attendance & crowd size · Busy periods · LegaSea email signups · What went well · Any other observations"
                 value={ev.notes||""} onChange={e=>upd("notes",e.target.value)}/>
             </Fld>
           </div>
         </Card>
 
-        <Btn onClick={()=>setShowSum(true)} className="w-full bg-kaiGreen hover:bg-green-700 text-white py-4 rounded-2xl text-base font-serif font-bold shadow">Review & Submit</Btn>
-        <Btn onClick={doClear} className="w-full text-gray-400 hover:text-red-400 py-2 text-xs">Clear event &amp; return home</Btn>
+        <Btn onClick={()=>setShowSum(true)} className="w-full bg-kaiGreen hover:bg-green-700 text-white py-4 rounded-2xl text-base font-serif font-bold shadow">
+          Review & Submit
+        </Btn>
+        <Btn onClick={doClear} className="w-full text-gray-400 hover:text-red-400 py-2 text-xs">
+          Clear event &amp; return home
+        </Btn>
       </div>
 
       {/* Summary modal */}
@@ -857,9 +1097,17 @@ function EventScreen({webAppUrl,onBack}){
           <div className="bg-kaiYellow w-full max-w-lg rounded-2xl shadow-2xl overflow-y-auto max-h-[90dvh] p-5 relative fade">
             <Btn onClick={()=>setShowSum(false)} className="absolute top-4 right-4 text-kaiBurgundy text-xl font-bold">✕</Btn>
             <h2 className="text-xl font-serif font-bold mb-3 text-kaiBurgundy">Report Summary</h2>
-            <pre className="whitespace-pre-wrap font-sans text-gray-800 text-xs bg-white p-4 rounded-2xl leading-relaxed">{buildSummary(ev)}</pre>
-            <Btn onClick={()=>{navigator.clipboard.writeText(buildSummary(ev));setCopied(true);setTimeout(()=>setCopied(false),2000);}} className="mt-3 w-full bg-kaiBlue hover:bg-blue-900 text-white py-2.5 rounded-xl font-semibold text-sm">Copy to Clipboard</Btn>
-            <Btn onClick={doSubmit} disabled={loading} className="mt-2 w-full bg-kaiBurgundy hover:bg-red-800 disabled:bg-gray-300 text-white py-3.5 rounded-2xl text-base font-serif font-bold shadow">{loading?"Saving…":"Submit Report"}</Btn>
+            <pre className="whitespace-pre-wrap font-sans text-gray-800 text-xs bg-white p-4 rounded-2xl leading-relaxed">
+              {buildSummary(ev)}
+            </pre>
+            <Btn onClick={()=>{ navigator.clipboard.writeText(buildSummary(ev)); setCopied(true); setTimeout(()=>setCopied(false),2000); }}
+              className="mt-3 w-full bg-kaiBlue hover:bg-blue-900 text-white py-2.5 rounded-xl font-semibold text-sm">
+              Copy to Clipboard
+            </Btn>
+            <Btn onClick={doSubmit} disabled={loading}
+              className="mt-2 w-full bg-kaiBurgundy hover:bg-red-800 disabled:bg-gray-300 text-white py-3.5 rounded-2xl text-base font-serif font-bold shadow">
+              {loading?"Saving…":"Submit Report"}
+            </Btn>
           </div>
         </div>
       )}
@@ -868,324 +1116,416 @@ function EventScreen({webAppUrl,onBack}){
   );
 }
 
-// ─── STOCK SCREEN ─────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════
+// STOCK SCREEN
+// ═══════════════════════════════════════════════════════
 function StockScreen({webAppUrl,onBack}){
-  const[tab,setTab]=useState("levels");
-  const[levels,setLevels]=useState(null);
-  const[log,setLog]=useState([]);
-  const[loading,setLoading]=useState(false);
-  const[sub,setSub]=useState(false);
-  const[edits,setEdits]=useState({});
-  const[toast,setToast]=useState(null);
-  const[rDate,setRDate]=useState(toDay());
-  const[supplier,setSupplier]=useState("");
-  const[rItems,setRItems]=useState(STOCK_ITEMS.map(i=>({item:i,qty:"",cpu:""})));
+  const[tab,setTab]         = useState("levels");
+  const[levels,setLevels]   = useState(null);
+  const[log,setLog]         = useState([]);
+  const[loading,setLoading] = useState(false);
+  const[saving,setSaving]   = useState(false);
+  const[edits,setEdits]     = useState({});
+  const[toast,setToast]     = useState(null);
+  const[rDate,setRDate]     = useState(toDay());
+  const[supplier,setSupplier] = useState("");
+  const[rItems,setRItems]   = useState(STOCK_ITEMS.map(i=>({item:i,qty:"",cpu:""})));
 
-  const toast2=(m,c="bg-kaiGreen")=>{setToast({m,c});setTimeout(()=>setToast(null),2500);};
+  const toast2=(m,c="bg-kaiGreen")=>{ setToast({m,c}); setTimeout(()=>setToast(null),2500); };
 
-  const fetchStock=useCallback(async()=>{
-    if(!webAppUrl)return; setLoading(true);
+  const fetchStock = useCallback(async()=>{
+    if(!webAppUrl) return;
+    setLoading(true);
     try{
-      const r=await fetch(`${webAppUrl}?action=getStock`);
-      const d=await r.json();
-      if(d.success){setLevels(d.stock);setLog(d.reorderLog||[]);}
+      const r = await fetch(`${webAppUrl}?action=getStock`);
+      const d = await r.json();
+      if(d.success){ setLevels(d.stock); setLog(d.reorderLog||[]); }
       else toast2("Error: "+d.error,"bg-kaiBurgundy");
-    }catch{toast2("Connection failed","bg-kaiBurgundy");}
-    finally{setLoading(false);}
+    }catch{ toast2("Connection failed","bg-kaiBurgundy"); }
+    finally{ setLoading(false); }
   },[webAppUrl]);
 
-  useEffect(()=>{fetchStock();},[fetchStock]);
+  useEffect(()=>{ fetchStock(); },[fetchStock]);
 
-  const saveEdits=async()=>{
-    if(!Object.keys(edits).length)return; setSub(true);
+  const saveEdits = async () => {
+    if(!Object.keys(edits).length) return;
+    setSaving(true);
     try{
-      const fd=new FormData();fd.append("action","updateStock");
-      Object.entries(edits).forEach(([i,q])=>{fd.append("item[]",i);fd.append("qty[]",q);});
-      const r=await fetch(webAppUrl,{method:"POST",body:fd});
-      const d=await r.json();
-      if(d.success){toast2("✓ Stock updated");setEdits({});fetchStock();}
+      const fd=new FormData(); fd.append("action","updateStock");
+      Object.entries(edits).forEach(([i,q])=>{ fd.append("item[]",i); fd.append("qty[]",q); });
+      const r = await fetch(webAppUrl,{method:"POST",body:fd});
+      const d = await r.json();
+      if(d.success){ toast2("✓ Stock updated"); setEdits({}); fetchStock(); }
       else toast2("Error: "+d.error,"bg-kaiBurgundy");
-    }catch{toast2("Failed","bg-kaiBurgundy");}
-    finally{setSub(false);}
+    }catch{ toast2("Failed","bg-kaiBurgundy"); }
+    finally{ setSaving(false); }
   };
 
-  // FIX Bug 1: removed duplicate fd.append("date", supplier) — only one date append now
-  const submitReorder=async()=>{
-    const items=rItems.filter(r=>hasV(r.qty));
-    if(!items.length){toast2("Enter at least one quantity","bg-kaiBurgundy");return;}
-    if(!supplier.trim()){toast2("Enter a supplier / source","bg-kaiBurgundy");return;}
-    setSub(true);
+  const submitReorder = async () => {
+    const items = rItems.filter(r=>hasV(r.qty));
+    if(!items.length){ toast2("Enter at least one quantity","bg-kaiBurgundy"); return; }
+    if(!supplier.trim()){ toast2("Enter a supplier / source","bg-kaiBurgundy"); return; }
+    setSaving(true);
     try{
       const fd=new FormData();
       fd.append("action","reorder");
-      fd.append("date",rDate);          // FIX: was erroneously appending supplier here first
+      fd.append("date",rDate);           // date only — no duplicate append
       fd.append("supplier",supplier);
-      items.forEach(r=>{fd.append("item[]",r.item);fd.append("qty[]",r.qty);fd.append("costPerUnit[]",r.cpu||"0");});
-      const r=await fetch(webAppUrl,{method:"POST",body:fd});
-      const d=await r.json();
-      if(d.success){toast2("✓ Reorder logged");setSupplier("");setTab("levels");setRItems(STOCK_ITEMS.map(i=>({item:i,qty:"",cpu:""})));fetchStock();}
-      else toast2("Error: "+d.error,"bg-kaiBurgundy");
-    }catch{toast2("Failed","bg-kaiBurgundy");}
-    finally{setSub(false);}
+      items.forEach(r=>{
+        fd.append("item[]",r.item);
+        fd.append("qty[]",r.qty);
+        fd.append("costPerUnit[]",r.cpu||"0");
+      });
+      const r = await fetch(webAppUrl,{method:"POST",body:fd});
+      const d = await r.json();
+      if(d.success){
+        toast2("✓ Reorder logged");
+        setSupplier(""); setTab("levels");
+        setRItems(STOCK_ITEMS.map(i=>({item:i,qty:"",cpu:""})));
+        fetchStock();
+      } else toast2("Error: "+d.error,"bg-kaiBurgundy");
+    }catch{ toast2("Failed","bg-kaiBurgundy"); }
+    finally{ setSaving(false); }
   };
 
-  const reorderTotal=rItems.reduce((s,r)=>(parseFloat(r.qty)||0)*(parseFloat(r.cpu)||0)+s,0);
+  const reorderTotal = rItems.reduce((s,r)=>(parseFloat(r.qty)||0)*(parseFloat(r.cpu)||0)+s, 0);
 
   return(
-    <div className="max-w-lg mx-auto p-4 md:p-8">
+    <div className="min-h-screen flex flex-col">
       {toast&&<Toast msg={toast.m} color={toast.c}/>}
       <Header sub="Stock Management" onBack={onBack}/>
-      <div className="flex rounded-2xl overflow-hidden border border-gray-100 shadow-sm mb-4">
-        {[["levels","Stock Levels"],["reorder","Log Reorder"],["log","History"]].map(([id,lbl])=>(
-          <Btn key={id} onClick={()=>setTab(id)} className={`flex-1 py-3 font-semibold text-sm transition-colors ${tab===id?"bg-kaiGreen text-white":"bg-white text-gray-500"}`}>{lbl}</Btn>
-        ))}
-      </div>
+      <div className="flex-1 w-full max-w-lg mx-auto px-4 pb-8">
+        <div className="flex rounded-2xl overflow-hidden border border-gray-100 shadow-sm mb-4">
+          {[["levels","Stock Levels"],["reorder","Log Reorder"],["log","History"]].map(([id,lbl])=>(
+            <Btn key={id} onClick={()=>setTab(id)}
+              className={`flex-1 py-3 font-semibold text-sm transition-colors ${tab===id?"bg-kaiGreen text-white":"bg-white text-gray-500"}`}>
+              {lbl}
+            </Btn>
+          ))}
+        </div>
 
-      {tab==="levels"&&(
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-          <div className="bg-kaiGreen/5 px-4 py-3 border-b flex justify-between items-center">
-            <span className="font-serif text-kaiGreen text-sm font-semibold">Current Stock</span>
-            <Btn onClick={fetchStock} className="text-xs text-kaiGreen hover:underline">↻ Refresh</Btn>
-          </div>
-          {loading?<p className="p-6 text-center text-gray-400 text-sm">Loading…</p>:(
-            <>
-              <div className="divide-y divide-gray-50">
-                {STOCK_ITEMS.map(item=>{
-                  const lv=levels?.[item];const ed=edits[item];
-                  const disp=ed!==undefined?ed:(lv!=null?r1(lv):"-");
-                  const low=typeof lv==="number"&&lv<=2;
-                  return(
-                    <div key={item} className="flex items-center px-4 py-3 gap-3">
-                      <span className="flex-1 text-sm text-gray-700">{item}</span>
-                      {low&&<span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-medium">Low</span>}
-                      <input type="number" step="0.1" className="w-20 border border-gray-200 rounded-xl px-2 py-1 text-sm text-right"
-                        value={disp==="-"?"":disp} placeholder={disp==="-"?"-":undefined}
-                        onFocus={e=>{if(e.target.value==="0")e.target.value="";}}
-                        onChange={e=>setEdits(p=>({...p,[item]:e.target.value}))}
-                        onBlur={e=>{ if(hasV(e.target.value))setEdits(p=>({...p,[item]:r1(e.target.value)})); }}/>
+        {/* Stock Levels tab */}
+        {tab==="levels"&&(
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+            <div className="bg-kaiGreen/5 px-4 py-3 border-b flex justify-between items-center">
+              <span className="font-serif text-kaiGreen text-sm font-semibold">Current Stock</span>
+              <Btn onClick={fetchStock} className="text-xs text-kaiGreen hover:underline">↻ Refresh</Btn>
+            </div>
+            {loading
+              ? <p className="p-6 text-center text-gray-400 text-sm">Loading…</p>
+              : <>
+                  <div className="divide-y divide-gray-50">
+                    {STOCK_ITEMS.map(item=>{
+                      const lv   = levels?.[item];
+                      const ed   = edits[item];
+                      const disp = ed!==undefined ? ed : (lv!=null ? r1(lv) : "-");
+                      const low  = typeof lv==="number" && lv<=2;
+                      return(
+                        <div key={item} className="flex items-center px-4 py-3 gap-3">
+                          <span className="flex-1 text-sm text-gray-700">{item}</span>
+                          {low&&<span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-medium">Low</span>}
+                          <input type="number" step="0.1"
+                            className="w-20 border border-gray-200 rounded-xl px-2 py-1 text-sm text-right bg-white"
+                            value={disp==="-"?"":disp} placeholder={disp==="-"?"-":undefined}
+                            onFocus={e=>{ if(e.target.value==="0") e.target.value=""; }}
+                            onChange={e=>setEdits(p=>({...p,[item]:e.target.value}))}
+                            onBlur={e=>{ if(hasV(e.target.value)) setEdits(p=>({...p,[item]:r1(e.target.value)})); }}/>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {Object.keys(edits).length>0&&(
+                    <div className="p-4 border-t">
+                      <Btn onClick={saveEdits} disabled={saving}
+                        className="w-full bg-kaiGreen hover:bg-green-700 disabled:opacity-50 text-white py-2.5 rounded-xl font-semibold text-sm">
+                        {saving?"Saving…":"Save Changes"}
+                      </Btn>
                     </div>
-                  );
-                })}
-              </div>
-              {Object.keys(edits).length>0&&<div className="p-4 border-t"><Btn onClick={saveEdits} disabled={sub} className="w-full bg-kaiGreen hover:bg-green-700 disabled:opacity-50 text-white py-2.5 rounded-xl font-semibold text-sm">{sub?"Saving…":"Save Changes"}</Btn></div>}
-            </>
-          )}
-        </div>
-      )}
-
-      {tab==="reorder"&&(
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-          <div className="bg-kaiBurgundy/5 px-4 py-3 border-b"><span className="font-serif text-kaiBurgundy text-sm font-semibold">Log a Reorder</span></div>
-          <div className="p-4 space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <Fld label="Date *"><input type="date" className={INP} value={rDate} onChange={e=>setRDate(e.target.value)}/></Fld>
-              <Fld label="Supplier *"><input type="text" placeholder="e.g. Gilmours" className={INP} value={supplier} onChange={e=>setSupplier(e.target.value)}/></Fld>
-            </div>
-            <div>
-              <div className="grid grid-cols-3 gap-x-2 px-1 mb-1">
-                <span className="text-xs text-gray-400 font-medium">Item</span>
-                <span className="text-xs text-gray-400 font-medium text-right">Qty</span>
-                <span className="text-xs text-gray-400 font-medium text-right">$/unit</span>
-              </div>
-              <div className="border border-gray-100 rounded-xl overflow-hidden divide-y divide-gray-50">
-                {rItems.map((r,i)=>(
-                  <div key={r.item} className="grid grid-cols-3 gap-x-2 items-center px-3 py-2">
-                    <span className="text-xs text-gray-700 truncate">{r.item}</span>
-                    <input type="number" placeholder="0" className="border border-gray-200 rounded-lg px-2 py-1 text-xs text-right"
-                      value={r.qty} onChange={e=>{const u=[...rItems];u[i]={...r,qty:e.target.value};setRItems(u);}}/>
-                    <input type="number" step="0.01" placeholder="0.00" className="border border-gray-200 rounded-lg px-2 py-1 text-xs text-right"
-                      value={r.cpu} onChange={e=>{const u=[...rItems];u[i]={...r,cpu:e.target.value};setRItems(u);}}/>
-                  </div>
-                ))}
-              </div>
-            </div>
-            {reorderTotal>0&&<div className="bg-gray-50 rounded-xl px-4 py-2 flex justify-between text-sm"><span className="text-gray-500">Total reorder cost</span><span className="font-bold text-kaiBurgundy">{fmt(reorderTotal)}</span></div>}
-            <Btn onClick={submitReorder} disabled={sub} className="w-full bg-kaiBurgundy hover:bg-red-800 disabled:opacity-50 text-white py-3 rounded-xl font-semibold">{sub?"Saving…":"Submit Reorder"}</Btn>
+                  )}
+                </>
+            }
           </div>
-        </div>
-      )}
+        )}
 
-      {tab==="log"&&(
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-          <div className="bg-kaiBlue/5 px-4 py-3 border-b"><span className="font-serif text-kaiBlue text-sm font-semibold">Reorder History</span></div>
-          {log.length===0?<p className="p-6 text-center text-sm text-gray-400">No reorders logged yet</p>
-            :log.map((r,i)=>(
-              <div key={i} className="p-4 border-b border-gray-50 last:border-0">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="font-semibold text-sm text-gray-800">{r.date}</span>
-                  <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">{r.supplier}</span>
-                </div>
-                {r.items?.map((it,j)=>(
-                  <div key={j} className="flex justify-between text-xs text-gray-600 py-0.5">
-                    <span>{it.item}</span>
-                    <span className="font-medium">×{it.qty}{it.costPerUnit>0?` @ ${fmt(it.costPerUnit)} = ${fmt(it.qty*it.costPerUnit)}`:""}</span>
-                  </div>
-                ))}
-                {r.totalCost>0&&<div className="mt-2 pt-2 border-t border-gray-100 flex justify-between text-xs"><span className="text-gray-400">Order total</span><span className="font-bold text-kaiBurgundy">{fmt(r.totalCost)}</span></div>}
+        {/* Log Reorder tab */}
+        {tab==="reorder"&&(
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+            <div className="bg-kaiBurgundy/5 px-4 py-3 border-b">
+              <span className="font-serif text-kaiBurgundy text-sm font-semibold">Log a Reorder</span>
+            </div>
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <Fld label="Date *">
+                  <input type="date" className={INP} value={rDate} onChange={e=>setRDate(e.target.value)}/>
+                </Fld>
+                <Fld label="Supplier *">
+                  <input type="text" placeholder="e.g. Gilmours" className={INP} value={supplier} onChange={e=>setSupplier(e.target.value)}/>
+                </Fld>
               </div>
-            ))
-          }
-        </div>
-      )}
+              <div>
+                <div className="grid grid-cols-3 gap-x-2 px-1 mb-1">
+                  <span className="text-xs text-gray-400 font-medium">Item</span>
+                  <span className="text-xs text-gray-400 font-medium text-right">Qty</span>
+                  <span className="text-xs text-gray-400 font-medium text-right">$/unit</span>
+                </div>
+                <div className="border border-gray-100 rounded-xl overflow-hidden divide-y divide-gray-50">
+                  {rItems.map((r,i)=>(
+                    <div key={r.item} className="grid grid-cols-3 gap-x-2 items-center px-3 py-2">
+                      <span className="text-xs text-gray-700 truncate">{r.item}</span>
+                      <input type="number" step="1" placeholder="0"
+                        className="border border-gray-200 rounded-lg px-2 py-1 text-xs text-right bg-white"
+                        value={r.qty}
+                        onChange={e=>{ const u=[...rItems]; u[i]={...r,qty:e.target.value}; setRItems(u); }}
+                        onBlur={e=>{ if(hasV(e.target.value)){ const u=[...rItems]; u[i]={...r,qty:r1(e.target.value)}; setRItems(u); } }}/>
+                      <input type="number" step="0.01" placeholder="0.00"
+                        className="border border-gray-200 rounded-lg px-2 py-1 text-xs text-right bg-white"
+                        value={r.cpu}
+                        onChange={e=>{ const u=[...rItems]; u[i]={...r,cpu:e.target.value}; setRItems(u); }}/>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {reorderTotal>0&&(
+                <div className="bg-gray-50 rounded-xl px-4 py-2 flex justify-between text-sm">
+                  <span className="text-gray-500">Total reorder cost</span>
+                  <span className="font-bold text-kaiBurgundy">{fmt(reorderTotal)}</span>
+                </div>
+              )}
+              <Btn onClick={submitReorder} disabled={saving}
+                className="w-full bg-kaiBurgundy hover:bg-red-800 disabled:opacity-50 text-white py-3 rounded-xl font-semibold">
+                {saving?"Saving…":"Submit Reorder"}
+              </Btn>
+            </div>
+          </div>
+        )}
+
+        {/* History tab */}
+        {tab==="log"&&(
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+            <div className="bg-kaiBlue/5 px-4 py-3 border-b">
+              <span className="font-serif text-kaiBlue text-sm font-semibold">Reorder History</span>
+            </div>
+            {log.length===0
+              ? <p className="p-6 text-center text-sm text-gray-400">No reorders logged yet</p>
+              : log.map((r,i)=>(
+                  <div key={i} className="p-4 border-b border-gray-50 last:border-0">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="font-semibold text-sm text-gray-800">{r.date}</span>
+                      <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">{r.supplier}</span>
+                    </div>
+                    {r.items?.map((it,j)=>(
+                      <div key={j} className="flex justify-between text-xs text-gray-600 py-0.5">
+                        <span>{it.item}</span>
+                        <span className="font-medium">
+                          ×{it.qty}{it.costPerUnit>0?` @ ${fmt(it.costPerUnit)} = ${fmt(it.qty*it.costPerUnit)}`:""}
+                        </span>
+                      </div>
+                    ))}
+                    {r.totalCost>0&&(
+                      <div className="mt-2 pt-2 border-t border-gray-100 flex justify-between text-xs">
+                        <span className="text-gray-400">Order total</span>
+                        <span className="font-bold text-kaiBurgundy">{fmt(r.totalCost)}</span>
+                      </div>
+                    )}
+                  </div>
+                ))
+            }
+          </div>
+        )}
+      </div>
       <OfflineBanner/>
     </div>
   );
 }
 
-// ─── DASHBOARD ────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════
+// DASHBOARD SCREEN
+// Fetches allEvents from backend, filters client-side.
+// ═══════════════════════════════════════════════════════
 function DashScreen({webAppUrl,onBack}){
-  const[rawData,setRaw]=useState(null);
-  const[loading,setLoading]=useState(true);
-  const[toast,setToast]=useState(null);
-  const[range,setRange]=useState("30");
-  const[cFrom,setCFrom]=useState("");
-  const[cTo,setCTo]=useState(toDay());
-  const[detail,setDetail]=useState(null);
+  const[rawData,setRaw]   = useState(null);
+  const[loading,setLoading] = useState(true);
+  const[toast,setToast]   = useState(null);
+  const[range,setRange]   = useState("30");
+  const[cFrom,setCFrom]   = useState("");
+  const[cTo,setCTo]       = useState(toDay());
+  const[detail,setDetail] = useState(null);
 
-  const toast2=(m,c="bg-kaiBurgundy")=>{setToast({m,c});setTimeout(()=>setToast(null),3000);};
+  const toast2=(m,c="bg-kaiBurgundy")=>{ setToast({m,c}); setTimeout(()=>setToast(null),3000); };
 
   useEffect(()=>{
-    if(!webAppUrl){setLoading(false);return;}
+    if(!webAppUrl){ setLoading(false); return; }
     fetch(`${webAppUrl}?action=dashboard`)
       .then(r=>r.json())
-      // FIX Bug 3: backend now returns allEvents (not recentEvents)
-      .then(d=>{if(d.success)setRaw(d);else toast2("Error: "+d.error);})
-      .catch(()=>toast2("Failed to connect"))
+      .then(d=>{ if(d.success) setRaw(d); else toast2("Dashboard error: "+d.error); })
+      .catch(e=>toast2("Could not connect to Apps Script"))
       .finally(()=>setLoading(false));
   },[webAppUrl]);
 
-  const data=useMemo(()=>{
-    if(!rawData)return null;
-    // FIX Bug 3: use allEvents array; filter client-side
-    const allEvs=rawData.allEvents||[];
-    const now=new Date(); let from=null,to=toDay();
-    if(range==="7"){const d=new Date(now);d.setDate(d.getDate()-7);from=d.toISOString().slice(0,10);}
-    if(range==="30"){const d=new Date(now);d.setDate(d.getDate()-30);from=d.toISOString().slice(0,10);}
-    if(range==="90"){const d=new Date(now);d.setDate(d.getDate()-90);from=d.toISOString().slice(0,10);}
-    if(range==="custom"){from=cFrom||null;to=cTo||toDay();}
-    const evs=allEvs.filter(ev=>{
-      if(from&&ev.date<from)return false;
-      if(to&&ev.date>to)return false;
+  // Filter allEvents by date range, compute aggregates
+  const data = useMemo(()=>{
+    if(!rawData?.allEvents) return null;
+    const all = rawData.allEvents;
+    const now = new Date();
+    let from=null, to=toDay();
+    if(range==="7"){  const d=new Date(now); d.setDate(d.getDate()-7);  from=d.toISOString().slice(0,10); }
+    if(range==="30"){ const d=new Date(now); d.setDate(d.getDate()-30); from=d.toISOString().slice(0,10); }
+    if(range==="90"){ const d=new Date(now); d.setDate(d.getDate()-90); from=d.toISOString().slice(0,10); }
+    if(range==="custom"){ from=cFrom||null; to=cTo||toDay(); }
+    // "all" → no date filter
+    const evs = all.filter(ev=>{
+      if(from && ev.date<from) return false;
+      if(to   && ev.date>to)   return false;
       return true;
     });
-    const rev=evs.reduce((s,ev)=>s+parseFloat(ev.totalSales||0),0);
-    const stockCost=evs.reduce((s,ev)=>s+(ev.stockCost||0),0);
-    const staffCost=evs.reduce((s,ev)=>s+(ev.staffCost||0),0);
-    const profit=rev-stockCost-staffCost;
-    // Top products: backend now returns sales[] array per event
+    const rev       = evs.reduce((s,ev)=>s+(parseFloat(ev.totalSales)||0), 0);
+    const staffCost = evs.reduce((s,ev)=>s+(ev.staffCost||0), 0);
+    const stockCost = evs.reduce((s,ev)=>s+(ev.stockCost||0), 0);
+    const profit    = rev-staffCost-stockCost;
+    // Top sellers from sales[] arrays
     const pm={};
-    evs.forEach(ev=>(ev.sales||[]).forEach(s=>{pm[s.product]=(pm[s.product]||0)+(parseFloat(s.qty)||0);}));
-    const top=Object.entries(pm).map(([p,q])=>({product:p,qty:q})).sort((a,b)=>b.qty-a.qty).slice(0,8);
-    return{allEvents:evs,totalRevenue:rev.toFixed(2),
-      totalStockCost:stockCost.toFixed(2),totalStaffCost:staffCost.toFixed(2),
-      estimatedProfit:profit.toFixed(2),totalEvents:evs.length,topProducts:top};
+    evs.forEach(ev=>(ev.sales||[]).forEach(s=>{ pm[s.product]=(pm[s.product]||0)+(parseFloat(s.qty)||0); }));
+    const topProducts = Object.entries(pm).map(([product,qty])=>({product,qty})).sort((a,b)=>b.qty-a.qty).slice(0,8);
+    return {
+      evs,
+      totalEvents:  evs.length,
+      totalRevenue: rev.toFixed(2),
+      totalStaffCost: staffCost.toFixed(2),
+      totalStockCost: stockCost.toFixed(2),
+      estimatedProfit: profit.toFixed(2),
+      topProducts,
+    };
   },[rawData,range,cFrom,cTo]);
 
-  const stat=(lbl,val,color,sub)=>(
+  const StatBox = ({label,val,color,sub}) => (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 text-center">
       <div className={`text-xl font-serif font-bold ${color}`}>{val??"-"}</div>
-      <div className="text-xs text-gray-400 mt-0.5">{lbl}</div>
+      <div className="text-xs text-gray-400 mt-0.5">{label}</div>
       {sub&&<div className="text-[10px] text-gray-300 mt-0.5">{sub}</div>}
     </div>
   );
 
-  const profColor=data&&parseFloat(data.estimatedProfit)>=0?"text-kaiGreen":"text-red-500";
+  const profitColor = data && parseFloat(data.estimatedProfit)>=0 ? "text-kaiGreen" : "text-red-500";
 
   return(
-    <div className="max-w-lg mx-auto p-4 md:p-8">
+    <div className="min-h-screen flex flex-col">
       {toast&&<Toast msg={toast.m} color={toast.c}/>}
       <Header sub="Dashboard" onBack={onBack}/>
+      <div className="flex-1 w-full max-w-lg mx-auto px-4 pb-8 space-y-4">
 
-      {/* Date filter */}
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-3 mb-4">
-        <div className="flex flex-wrap gap-1.5">
-          {[["7","7 days"],["30","30 days"],["90","90 days"],["all","All time"],["custom","Custom"]].map(([v,l])=>(
-            <Btn key={v} onClick={()=>setRange(v)} className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors ${range===v?"bg-kaiBlue text-white":"bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>{l}</Btn>
-          ))}
-        </div>
-        {range==="custom"&&(
-          <div className="mt-3 grid grid-cols-2 gap-2">
-            <Fld label="From"><input type="date" className={INP} value={cFrom} onChange={e=>setCFrom(e.target.value)}/></Fld>
-            <Fld label="To"><input type="date" className={INP} value={cTo} onChange={e=>setCTo(e.target.value)}/></Fld>
+        {/* Date range filter */}
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-3">
+          <div className="flex flex-wrap gap-1.5">
+            {[["7","7 days"],["30","30 days"],["90","90 days"],["all","All time"],["custom","Custom"]].map(([v,l])=>(
+              <Btn key={v} onClick={()=>setRange(v)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors ${range===v?"bg-kaiBlue text-white":"bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>
+                {l}
+              </Btn>
+            ))}
           </div>
-        )}
+          {range==="custom"&&(
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <Fld label="From"><input type="date" className={INP} value={cFrom} onChange={e=>setCFrom(e.target.value)}/></Fld>
+              <Fld label="To">  <input type="date" className={INP} value={cTo}   onChange={e=>setCTo(e.target.value)}/></Fld>
+            </div>
+          )}
+        </div>
+
+        {loading
+          ? <div className="text-center py-16 text-gray-400">Loading…</div>
+          : !data
+            ? <div className="bg-white rounded-2xl p-8 text-center text-sm text-gray-400">Submit your first report to see stats</div>
+            : <>
+                {/* Key stats */}
+                <div className="grid grid-cols-2 gap-3">
+                  <StatBox label="Events"     val={data.totalEvents}                 color="text-kaiBurgundy"/>
+                  <StatBox label="Revenue"    val={"$"+data.totalRevenue}            color="text-kaiGreen"/>
+                  <StatBox label="Staff Cost" val={"$"+data.totalStaffCost}          color="text-kaiBlue" sub="@ $30/hr"/>
+                  <StatBox label="Stock Cost" val={"$"+data.totalStockCost}          color="text-coffeeBrown" sub="most recent prices"/>
+                </div>
+
+                {/* P&L */}
+                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-xs text-gray-400 mb-1">Estimated Profit</div>
+                      <div className={`text-2xl font-serif font-bold ${profitColor}`}>${data.estimatedProfit}</div>
+                      <div className="text-xs text-gray-300 mt-1">Revenue − Stock − Staff</div>
+                    </div>
+                    <div className="text-right space-y-0.5 text-xs">
+                      <div className="text-gray-500">Revenue <span className="font-semibold text-gray-700">${data.totalRevenue}</span></div>
+                      <div className="text-gray-500">− Stock <span className="font-semibold text-gray-700">${data.totalStockCost}</span></div>
+                      <div className="text-gray-500">− Staff <span className="font-semibold text-gray-700">${data.totalStaffCost}</span></div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Events list */}
+                {data.evs.length>0&&(
+                  <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                    <div className="bg-kaiBurgundy/5 px-4 py-3 border-b">
+                      <span className="font-serif text-kaiBurgundy text-sm font-semibold">Events</span>
+                    </div>
+                    <div className="divide-y divide-gray-50">
+                      {[...data.evs].sort((a,b)=>b.date.localeCompare(a.date)).map((ev,i)=>(
+                        <Btn key={i} onClick={()=>setDetail(ev)}
+                          className="w-full px-4 py-3 flex items-center gap-2 text-left hover:bg-gray-50">
+                          <div className="flex-1 min-w-0">
+                            <div className="font-semibold text-sm text-gray-800 truncate">{ev.eventName}</div>
+                            <div className="text-xs text-gray-400">{ev.date}{ev.location?` · ${ev.location}`:""}</div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <div className="text-sm font-bold text-kaiGreen">
+                              {ev.totalSales?`$${parseFloat(ev.totalSales).toFixed(2)}`:"-"}
+                            </div>
+                            {(ev.staffCost>0||ev.stockCost>0)&&(
+                              <div className="text-xs text-gray-400">
+                                cost ${((ev.staffCost||0)+(ev.stockCost||0)).toFixed(2)}
+                              </div>
+                            )}
+                          </div>
+                          <svg className="h-4 w-4 text-gray-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7"/>
+                          </svg>
+                        </Btn>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Top sellers */}
+                {data.topProducts.length>0&&(
+                  <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                    <div className="bg-kaiGreen/5 px-4 py-3 border-b">
+                      <span className="font-serif text-kaiGreen text-sm font-semibold">Top Sellers</span>
+                    </div>
+                    <div className="divide-y divide-gray-50">
+                      {data.topProducts.map((p,i)=>(
+                        <div key={i} className="px-4 py-2.5 flex justify-between">
+                          <span className="text-sm text-gray-700">{i+1}. {p.product}</span>
+                          <span className="text-sm font-bold">{p.qty} sold</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+        }
       </div>
 
-      {loading?<div className="text-center py-16 text-gray-400">Loading…</div>
-       :!data?<div className="bg-white rounded-2xl p-8 text-center text-sm text-gray-400">Submit your first report to see stats</div>
-       :(
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            {stat("Events",data.totalEvents,"text-kaiBurgundy")}
-            {stat("Revenue","$"+data.totalRevenue,"text-kaiGreen")}
-            {stat("Staff Cost","$"+data.totalStaffCost,"text-kaiBlue","@ $30/hr")}
-            {stat("Stock Cost","$"+data.totalStockCost,"text-coffeeBrown","most recent prices")}
-          </div>
-
-          {/* Profit */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-xs text-gray-400 mb-1">Estimated Profit</div>
-                <div className={`text-2xl font-serif font-bold ${profColor}`}>${data.estimatedProfit}</div>
-                <div className="text-xs text-gray-300 mt-1">Revenue − Stock − Staff</div>
-              </div>
-              <div className="text-right space-y-0.5 text-xs">
-                <div className="text-gray-500">Revenue <span className="font-semibold text-gray-700">${data.totalRevenue}</span></div>
-                <div className="text-gray-500">− Stock <span className="font-semibold text-gray-700">${data.totalStockCost}</span></div>
-                <div className="text-gray-500">− Staff <span className="font-semibold text-gray-700">${data.totalStaffCost}</span></div>
-              </div>
-            </div>
-          </div>
-
-          {/* FIX Bug 3: use allEvents (not recentEvents) */}
-          {data.allEvents?.length>0&&(
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-              <div className="bg-kaiBurgundy/5 px-4 py-3 border-b"><span className="font-serif text-kaiBurgundy text-sm font-semibold">Events</span></div>
-              <div className="divide-y divide-gray-50">
-                {[...data.allEvents].sort((a,b)=>b.date.localeCompare(a.date)).map((ev,i)=>(
-                  <Btn key={i} onClick={()=>setDetail(ev)} className="w-full px-4 py-3 flex items-center gap-2 text-left hover:bg-gray-50">
-                    <div className="flex-1 min-w-0">
-                      <div className="font-semibold text-sm text-gray-800 truncate">{ev.eventName}</div>
-                      <div className="text-xs text-gray-400">{ev.date}{ev.location?` · ${ev.location}`:""}</div>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <div className="text-sm font-bold text-kaiGreen">{ev.totalSales?`$${parseFloat(ev.totalSales).toFixed(2)}`:"-"}</div>
-                      {(ev.staffCost>0||ev.stockCost>0)&&<div className="text-xs text-gray-400">cost ${((ev.staffCost||0)+(ev.stockCost||0)).toFixed(2)}</div>}
-                    </div>
-                    <svg className="h-4 w-4 text-gray-300 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7"/></svg>
-                  </Btn>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {data.topProducts?.length>0&&(
-            <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-              <div className="bg-kaiGreen/5 px-4 py-3 border-b"><span className="font-serif text-kaiGreen text-sm font-semibold">Top Sellers</span></div>
-              <div className="divide-y divide-gray-50">
-                {data.topProducts.map((p,i)=>(
-                  <div key={i} className="px-4 py-2.5 flex justify-between">
-                    <span className="text-sm text-gray-700">{i+1}. {p.product}</span>
-                    <span className="text-sm font-bold">{p.qty} sold</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-       )}
-
-      {/* Event detail modal — FIX Bug 3: uses sales[], staff[], stockUsed[] from allEvents */}
+      {/* Event detail modal */}
       {detail&&(
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-y-auto max-h-[90dvh] fade">
             <div className="bg-kaiBurgundy text-white px-5 py-4 rounded-t-2xl flex justify-between items-start">
-              <div><div className="font-serif font-bold text-lg">{detail.eventName}</div><div className="text-xs text-white/60 mt-0.5">{detail.date}{detail.location?` · ${detail.location}`:""}</div></div>
+              <div>
+                <div className="font-serif font-bold text-lg">{detail.eventName}</div>
+                <div className="text-xs text-white/60 mt-0.5">{detail.date}{detail.location?` · ${detail.location}`:""}</div>
+              </div>
               <Btn onClick={()=>setDetail(null)} className="text-white/70 hover:text-white text-xl font-bold ml-4">✕</Btn>
             </div>
             <div className="p-5 space-y-4">
-              {/* P&L */}
+              {/* Per-event P&L */}
               <div className="bg-gray-50 rounded-2xl p-4 space-y-2">
                 <div className="flex justify-between text-sm"><span className="text-gray-500">Revenue</span><span className="font-bold text-kaiGreen">${parseFloat(detail.totalSales||0).toFixed(2)}</span></div>
                 <div className="flex justify-between text-sm"><span className="text-gray-500">Staff cost</span><span className="font-semibold text-kaiBlue">−${(detail.staffCost||0).toFixed(2)}</span></div>
@@ -1197,13 +1537,47 @@ function DashScreen({webAppUrl,onBack}){
                   </span>
                 </div>
               </div>
-              {/* Sales — FIX: now uses sales[] not salesDetail[] */}
-              {detail.sales?.length>0&&<div><div className="text-xs font-semibold text-gray-500 mb-2">Sales</div>{detail.sales.filter(s=>s.qty>0).map((s,i)=><div key={i} className="flex justify-between text-sm py-1 border-b border-gray-50 last:border-0"><span className="text-gray-700">{s.product}</span><span className="font-semibold">{s.qty}</span></div>)}</div>}
-              {/* Staff — FIX: now uses staff[] not staffDetail[] */}
-              {detail.staff?.length>0&&<div><div className="text-xs font-semibold text-gray-500 mb-2">Staff</div>{detail.staff.map((s,i)=><div key={i} className="flex justify-between text-sm py-1 border-b border-gray-50 last:border-0"><span className="text-gray-700">{s.name}</span><span className="font-semibold">{s.hours}h = ${(s.hours*HOURLY).toFixed(2)}</span></div>)}</div>}
-              {/* Stock — FIX: now uses stockUsed[] not stockDetail[] */}
-              {detail.stockUsed?.length>0&&<div><div className="text-xs font-semibold text-gray-500 mb-2">Stock Used</div>{detail.stockUsed.map((s,i)=><div key={i} className="flex justify-between text-sm py-1 border-b border-gray-50 last:border-0"><span className="text-gray-700">{s.item}</span><span className="font-semibold">{s.qty}</span></div>)}</div>}
-              {(detail.equipmentIssues||detail.notes)&&<div><div className="text-xs font-semibold text-gray-500 mb-2">Notes</div>{detail.equipmentIssues&&<p className="text-sm text-gray-700 mb-1"><span className="font-medium">Issues:</span> {detail.equipmentIssues}</p>}{detail.notes&&<p className="text-sm text-gray-700"><span className="font-medium">Notes:</span> {detail.notes}</p>}</div>}
+              {/* Sales detail — uses sales[] from allEvents */}
+              {detail.sales?.filter(s=>s.qty>0).length>0&&(
+                <div>
+                  <div className="text-xs font-semibold text-gray-500 mb-2">Sales</div>
+                  {detail.sales.filter(s=>s.qty>0).map((s,i)=>(
+                    <div key={i} className="flex justify-between text-sm py-1 border-b border-gray-50 last:border-0">
+                      <span className="text-gray-700">{s.product}</span><span className="font-semibold">{s.qty}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* Staff detail — uses staff[] from allEvents */}
+              {detail.staff?.length>0&&(
+                <div>
+                  <div className="text-xs font-semibold text-gray-500 mb-2">Staff</div>
+                  {detail.staff.map((s,i)=>(
+                    <div key={i} className="flex justify-between text-sm py-1 border-b border-gray-50 last:border-0">
+                      <span className="text-gray-700">{s.name}</span>
+                      <span className="font-semibold">{s.hours}h = ${(s.hours*HOURLY).toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* Stock detail — uses stockUsed[] from allEvents */}
+              {detail.stockUsed?.length>0&&(
+                <div>
+                  <div className="text-xs font-semibold text-gray-500 mb-2">Stock Used</div>
+                  {detail.stockUsed.map((s,i)=>(
+                    <div key={i} className="flex justify-between text-sm py-1 border-b border-gray-50 last:border-0">
+                      <span className="text-gray-700">{s.item}</span><span className="font-semibold">{s.qty}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {(detail.equipmentIssues||detail.notes)&&(
+                <div>
+                  <div className="text-xs font-semibold text-gray-500 mb-2">Notes</div>
+                  {detail.equipmentIssues&&<p className="text-sm text-gray-700 mb-1"><span className="font-medium">Issues:</span> {detail.equipmentIssues}</p>}
+                  {detail.notes&&<p className="text-sm text-gray-700"><span className="font-medium">Notes:</span> {detail.notes}</p>}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1213,19 +1587,21 @@ function DashScreen({webAppUrl,onBack}){
   );
 }
 
-// ─── ROOT ─────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════
+// ROOT
+// ═══════════════════════════════════════════════════════
 function App(){
-  const[url,setUrl]=useState(()=>lsGet(URL_KEY,""));
-  const[cfg,setCfg]=useState(()=>!!lsGet(URL_KEY));
-  const[screen,setScreen]=useState("home");
+  const[url,setUrl] = useState(()=>lsGet(URL_KEY,""));
+  const[cfg,setCfg] = useState(()=>!!lsGet(URL_KEY));
+  const[screen,setScreen] = useState("home");
 
-  const save=u=>{lsSet(URL_KEY,u);setUrl(u);setCfg(true);};
+  const saveUrl = u => { lsSet(URL_KEY,u); setUrl(u); setCfg(true); };
 
-  if(!cfg)return<SetupScreen onSave={save}/>;
-  if(screen==="event")return<EventScreen webAppUrl={url} onBack={()=>setScreen("home")}/>;
-  if(screen==="stock")return<StockScreen webAppUrl={url} onBack={()=>setScreen("home")}/>;
-  if(screen==="dash") return<DashScreen  webAppUrl={url} onBack={()=>setScreen("home")}/>;
-  return<HomeScreen onNav={setScreen} onSettings={()=>setCfg(false)}/>;
+  if(!cfg)            return <SetupScreen onSave={saveUrl}/>;
+  if(screen==="event") return <EventScreen webAppUrl={url} onBack={()=>setScreen("home")}/>;
+  if(screen==="stock") return <StockScreen webAppUrl={url} onBack={()=>setScreen("home")}/>;
+  if(screen==="dash")  return <DashScreen  webAppUrl={url} onBack={()=>setScreen("home")}/>;
+  return <HomeScreen onNav={setScreen} onSettings={()=>setCfg(false)}/>;
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
