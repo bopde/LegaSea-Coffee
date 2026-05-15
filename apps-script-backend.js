@@ -208,6 +208,10 @@ function handleGetStock() {
   return jsonResponse({ success: true, stock, reorderLog });
 }
 
+function safeDate(d) {
+  return Utilities.formatDate(new Date(d), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+}
+
 function buildReorderLog(ss) {
   const sheet = getOrCreateSheet(ss, 'ReorderLog', REORDER_HEADERS);
   const data  = sheet.getDataRange().getValues();
@@ -215,10 +219,11 @@ function buildReorderLog(ss) {
 
   for (let i = 1; i < data.length; i++) {
     const [date, supplier, item, qty, costPerUnit, totalCost] = data[i];
-    const key = `${date}__${supplier}`;
+    const dateStr = safeDate(date);
+    const key = `${dateStr}__${supplier}`;
     if (!map[key]) {
       map[key] = {
-        date:      String(date).slice(0, 10),
+        date:      dateStr,
         supplier:  String(supplier),
         items:     [],
         totalCost: 0
@@ -359,13 +364,13 @@ function handleDashboard() {
     const totalSales = row[14];
     const signups    = row[21];
 
-    const eventKey = `${date}__${eventName}`;
+    const eventKey = `${safeDate(date)}__${eventName}`;
 
     if (rowType === 'SALES_TOTAL') {
       const t = parseFloat(totalSales) || 0;
       totalRevenue += t;
-      if (!events[eventKey]) events[eventKey] = { date: String(date).slice(0,10), eventName: String(eventName), location: String(location), totalSales: 0, signups: 0 };
-      events[eventKey].totalSales = t.toFixed(2);
+      if (!events[eventKey]) events[eventKey] = { date: safeDate(date), eventName: String(eventName), location: String(location), totalSales: 0, signups: 0 };
+      events[eventKey].totalSales = ((parseFloat(events[eventKey].totalSales)||0) + t).toFixed(2);
     }
 
     if (rowType === 'SALES' && product) {
@@ -376,7 +381,7 @@ function handleDashboard() {
     if (rowType === 'NOTES' && signups) {
       const s = parseInt(signups) || 0;
       totalSignups += s;
-      if (!events[eventKey]) events[eventKey] = { date: String(date).slice(0,10), eventName: String(eventName), location: String(location), totalSales: 0, signups: 0 };
+      if (!events[eventKey]) events[eventKey] = { date: safeDate(date), eventName: String(eventName), location: String(location), totalSales: 0, signups: 0 };
       events[eventKey].signups = (events[eventKey].signups || 0) + s;
     }
   }
