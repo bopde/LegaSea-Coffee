@@ -145,7 +145,7 @@ function blankEv(){
     cashSales:"", eftposSales:"",
     // Stock section: independently editable
     stockLocked:false, stockOverride:null,
-    fridgeReadings:[], issues:"", notes:""
+    fridgeReadings:[], signups:"", issues:"", notes:""
   };
 }
 
@@ -256,10 +256,11 @@ function buildSummary(ev){
     s+=`\n--- Fridge ---\n`;
     ev.fridgeReadings.forEach(r=>{ s+=`${r.time}: ${r.temp}°C\n`; });
   }
-  if(hasV(ev.issues)||hasV(ev.notes)){
+  if(hasV(ev.signups)||hasV(ev.issues)||hasV(ev.notes)){
     s+=`\n--- Notes ---\n`;
-    if(hasV(ev.issues)) s+=`Issues: ${ev.issues}\n`;
-    if(hasV(ev.notes))  s+=`Notes: ${ev.notes}\n`;
+    if(hasV(ev.signups)) s+=`LegaSea Signups: ${ev.signups}\n`;
+    if(hasV(ev.issues))  s+=`Issues: ${ev.issues}\n`;
+    if(hasV(ev.notes))   s+=`Notes: ${ev.notes}\n`;
   }
   return s;
 }
@@ -826,7 +827,8 @@ function EventScreen({webAppUrl,onBack}){
       (ev.fridgeReadings||[]).forEach(r=>{
         fd.append("fridgeTime[]",r.time); fd.append("fridgeTemp[]",r.temp);
       });
-      fd.append("issues",ev.issues||"");
+      fd.append("legaseaSignups",ev.signups||"");
+      fd.append("equipmentIssues",ev.issues||"");
       fd.append("notes", ev.notes||"");
 
       const res = await fetch(webAppUrl,{method:"POST",body:fd});
@@ -1076,6 +1078,10 @@ function EventScreen({webAppUrl,onBack}){
         {/* Notes */}
         <Card title="Notes">
           <div className="space-y-3">
+            <Fld label="LegaSea Signups">
+              <input type="number" min="0" step="1" placeholder="0" className={INP}
+                value={ev.signups||""} onChange={e=>upd("signups",e.target.value)}/>
+            </Fld>
             <Fld label="Issues (equipment, water, power, etc.)">
               <textarea className={`${INP} h-20 resize-none`}
                 placeholder="e.g. No issues / Water pump slow / Power outage at 2pm"
@@ -1083,7 +1089,7 @@ function EventScreen({webAppUrl,onBack}){
             </Fld>
             <Fld label="General Notes">
               <textarea className={`${INP} h-28 resize-none`}
-                placeholder="Attendance & crowd size · Busy periods · LegaSea email signups · What went well · Any other observations"
+                placeholder="Attendance & crowd size · Busy periods · What went well · Any other observations"
                 value={ev.notes||""} onChange={e=>upd("notes",e.target.value)}/>
             </Fld>
           </div>
