@@ -338,69 +338,152 @@ function deductStock(ss, item, qtyToDeduct) {
 // =====================================================================
 // DASHBOARD
 // =====================================================================
+const HOURLY = 30; // staff cost per hour ($)
+
+// Returns most recent cost-per-unit for each stock item from ReorderLog.
+function buildReorderCosts(ss) {
+  const sheet = getOrCreateSheet(ss, 'ReorderLog', REORDER_HEADERS);
+  const data  = sheet.getDataRange().getValues();
+  // Sort newest-first so the first entry per item is the most recent price.
+  const rows = data.slice(1).sort((a, b) => {
+    const ta = a[0] instanceof Date ? a[0] : new Date(String(a[0]));
+    const tb = b[0] instanceof Date ? b[0] : new Date(String(b[0]));
+    return tb - ta;
+  });
+  const costs = {};
+  rows.forEach(([,, item,, costPerUnit]) => {
+    const key  = String(item);
+    const cost = parseFloat(costPerUnit) || 0;
+    if (key && cost > 0 && !(key in costs)) costs[key] = cost;
+  });
+  return costs;
+}
+
 function handleDashboard() {
   const ss    = getSpreadsheet();
   const sheet = getOrCreateSheet(ss, 'SalesReports', SALES_HEADERS);
   const data  = sheet.getDataRange().getValues();
 
+  const reorderCosts = buildReorderCosts(ss);
+
   let totalRevenue = 0;
   let totalSignups = 0;
-  const events         = {};
-  const productTotals  = {};
+  const evMap         = {};
+  const productTotals = {};
 
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
     // Columns: timestamp(0), date(1), eventName(2), location(3), completedBy(4),
-    //          rowType(5), staffName(6..9), product(10), qty(11),
-    //          cash(12), eftpos(13), total(14), stockItem(15), stockQty(16),
-    //          fridgeTime(17), fridgeTemp(18), crowdNotes(19), equipIssues(20),
-    //          signups(21), notes(22)
-    const date      = row[1];
-    const eventName = row[2];
-    const location  = row[3];
-    const rowType   = row[5];
-    const product   = row[10];
-    const qtySold   = row[11];
-    const totalSales = row[14];
-    const signups    = row[21];
+    //          rowType(5), staffName(6), staffStart(7), staffEnd(8), hoursWorked(9),
+    //          product(10), qty(11), cash(12), eftpos(13), total(14),
+    //          stockItem(15), stockQty(16), fridgeTime(17), fridgeTemp(18),
+    //          crowdNotes(19), equipIssues(20), signups(21), notes(22)
+    const date        = row[1];
+    const eventName   = row[2];
+    const location    = row[3];
+    const rowType     = row[5];
+    const staffName   = row[6];
+    const staffStart  = row[7];
+    const staffEnd    = row[8];
+    const hoursWorked = row[9];
+    const product     = row[10];
+    const qtySold     = row[11];
+    const cashSales   = row[12];
+    const eftposSales = row[13];
+    const totalSales  = row[14];
+    const stockItem   = row[15];
+    const stockQty    = row[16];
+    const equipIssues = row[20];
+    const signups     = row[21];
+    const notes       = row[22];
 
     const eventKey = `${safeDate(date)}__${eventName}`;
 
+    if (!evMap[eventKey]) {
+      evMap[eventKey] = {
+        date:            safeDate(date),
+        eventName:       String(eventName),
+        location:        String(location),
+        totalSales:      0,
+        cashSales:       0,
+        eftposSales:     0,
+        signups:         0,
+        staffCost:       0,
+        stockCost:       0,
+        sales:           {},
+        staff:           [],
+        stockUsed:       {},
+        equipmentIssues: '',
+        notes:           '',
+      };
+    }
+
+    const ev = evMap[eventKey];
+
     if (rowType === 'SALES_TOTAL') {
-      const t = parseFloat(totalSales) || 0;
-      totalRevenue += t;
-      if (!events[eventKey]) events[eventKey] = { date: safeDate(date), eventName: String(eventName), location: String(location), totalSales: 0, signups: 0 };
-      events[eventKey].totalSales = ((parseFloat(events[eventKey].totalSales)||0) + t).toFixed(2);
+      ev.totalSales  += parseFloat(totalSales)  || 0;
+      ev.cashSales   += parseFloat(cashSales)   || 0;
+      ev.eftposSales += parseFloat(eftposSales) || 0;
+      totalRevenue   += parseFloat(totalSales)  || 0;
+    }
+
+    if (rowType === 'STAFF' && staffName) {
+      const hours = parseFloat(hoursWorked) || calculateHours(String(staffStart), String(staffEnd));
+      ev.staffCost += hours * HOURLY;
+      ev.staff.push({ name: String(staffName), start: String(staffStart), end: String(staffEnd), hours: Math.round(hours * 100) / 100 });
     }
 
     if (rowType === 'SALES' && product) {
       const q = parseFloat(qtySold) || 0;
-      productTotals[String(product)] = (productTotals[String(product)] || 0) + q;
+      ev.sales[String(product)]        = (ev.sales[String(product)]        || 0) + q;
+      productTotals[String(product)]   = (productTotals[String(product)]   || 0) + q;
     }
 
-    if (rowType === 'NOTES' && signups) {
-      const s = parseInt(signups) || 0;
-      totalSignups += s;
-      if (!events[eventKey]) events[eventKey] = { date: safeDate(date), eventName: String(eventName), location: String(location), totalSales: 0, signups: 0 };
-      events[eventKey].signups = (events[eventKey].signups || 0) + s;
+    if (rowType === 'STOCK_USED' && stockItem) {
+      const q = parseFloat(stockQty) || 0;
+      ev.stockUsed[String(stockItem)] = (ev.stockUsed[String(stockItem)] || 0) + q;
+      ev.stockCost += q * (reorderCosts[String(stockItem)] || 0);
+    }
+
+    if (rowType === 'NOTES') {
+      if (signups) {
+        const s = parseInt(signups) || 0;
+        totalSignups += s;
+        ev.signups   += s;
+      }
+      if (equipIssues && String(equipIssues).trim()) ev.equipmentIssues = String(equipIssues);
+      if (notes      && String(notes).trim())        ev.notes           = String(notes);
     }
   }
 
-  const recentEvents = Object.values(events)
-    .sort((a, b) => b.date.localeCompare(a.date))
-    .slice(0, 10);
+  // Serialise event map to array, converting accumulator maps to arrays.
+  const allEvents = Object.values(evMap).map(ev => ({
+    date:            ev.date,
+    eventName:       ev.eventName,
+    location:        ev.location,
+    totalSales:      ev.totalSales.toFixed(2),
+    cashSales:       ev.cashSales.toFixed(2),
+    eftposSales:     ev.eftposSales.toFixed(2),
+    signups:         ev.signups,
+    staffCost:       Math.round(ev.staffCost * 100) / 100,
+    stockCost:       Math.round(ev.stockCost * 100) / 100,
+    sales:           Object.entries(ev.sales).map(([product, qty]) => ({ product, qty })),
+    staff:           ev.staff,
+    stockUsed:       Object.entries(ev.stockUsed).map(([item, qty]) => ({ item, qty: Math.round(qty * 1000) / 1000 })),
+    equipmentIssues: ev.equipmentIssues,
+    notes:           ev.notes,
+  })).sort((a, b) => b.date.localeCompare(a.date));
 
   const topProducts = Object.entries(productTotals)
     .map(([product, qty]) => ({ product, qty }))
     .sort((a, b) => b.qty - a.qty)
     .slice(0, 8);
 
-  const totalEvents = Object.keys(events).length;
+  const totalEvents = allEvents.length;
   const avgRevenue  = totalEvents > 0
     ? (totalRevenue / totalEvents).toFixed(2)
     : '0.00';
 
-  // Stock levels
   const stockSheet  = getOrCreateSheet(ss, 'StockLevels', STOCK_HEADERS);
   const stockData   = stockSheet.getDataRange().getValues();
   const stockLevels = {};
@@ -415,7 +498,7 @@ function handleDashboard() {
     totalRevenue: totalRevenue.toFixed(2),
     avgRevenue,
     totalSignups,
-    recentEvents,
+    allEvents,
     topProducts,
     stockLevels
   });

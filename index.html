@@ -1368,30 +1368,38 @@ function DashScreen({webAppUrl,onBack}){
       .finally(()=>setLoading(false));
   },[webAppUrl]);
 
-  // Filter recentEvents by date range, compute aggregates.
-  // Backend returns recentEvents (max 10, shape: {date,eventName,location,totalSales,signups}).
-  // Per-event staffCost/stockCost/sales[]/staff[]/stockUsed[] require a future backend extension.
+  // Filter allEvents by date range, compute aggregates
   const data = useMemo(()=>{
-    if(!rawData?.recentEvents) return null;
-    const all = rawData.recentEvents;
+    if(!rawData?.allEvents) return null;
+    const all = rawData.allEvents;
     const now = new Date();
+    // from/to are ISO date strings or null (null = no bound)
     let from=null, to=null;
     if(range==="7"){  const d=new Date(now); d.setDate(d.getDate()-7);  from=d.toISOString().slice(0,10); }
     if(range==="30"){ const d=new Date(now); d.setDate(d.getDate()-30); from=d.toISOString().slice(0,10); }
     if(range==="90"){ const d=new Date(now); d.setDate(d.getDate()-90); from=d.toISOString().slice(0,10); }
     if(range==="custom"){ from=cFrom||null; to=cTo||null; }
+    // range==="all" → from and to both null, no filter applied
     const evs = all.filter(ev=>{
       if(from && ev.date<from) return false;
       if(to   && ev.date>to)   return false;
       return true;
     });
-    const rev = evs.reduce((s,ev)=>s+(parseFloat(ev.totalSales)||0), 0);
-    // topProducts from backend pre-aggregated list (not date-filtered)
-    const topProducts = rawData.topProducts||[];
+    const rev       = evs.reduce((s,ev)=>s+(parseFloat(ev.totalSales)||0), 0);
+    const staffCost = evs.reduce((s,ev)=>s+(ev.staffCost||0), 0);
+    const stockCost = evs.reduce((s,ev)=>s+(ev.stockCost||0), 0);
+    const profit    = rev-staffCost-stockCost;
+    // Top sellers from sales[] arrays
+    const pm={};
+    evs.forEach(ev=>(ev.sales||[]).forEach(s=>{ pm[s.product]=(pm[s.product]||0)+(parseFloat(s.qty)||0); }));
+    const topProducts = Object.entries(pm).map(([product,qty])=>({product,qty})).sort((a,b)=>b.qty-a.qty).slice(0,8);
     return {
       evs,
       totalEvents:  evs.length,
       totalRevenue: rev.toFixed(2),
+      totalStaffCost: staffCost.toFixed(2),
+      totalStockCost: stockCost.toFixed(2),
+      estimatedProfit: profit.toFixed(2),
       topProducts,
     };
   },[rawData,range,cFrom,cTo]);
@@ -1403,6 +1411,8 @@ function DashScreen({webAppUrl,onBack}){
       {sub&&<div className="text-[10px] text-gray-300 mt-0.5">{sub}</div>}
     </div>
   );
+
+  const profitColor = data && parseFloat(data.estimatedProfit)>=0 ? "text-kaiGreen" : "text-red-500";
 
 
   return(
@@ -1444,10 +1454,26 @@ function DashScreen({webAppUrl,onBack}){
             : <>
                 {/* Key stats */}
                 <div className="grid grid-cols-2 gap-3">
-                  <StatBox label="Events"          val={data.totalEvents}                                         color="text-kaiBurgundy"/>
-                  <StatBox label="Revenue"         val={"$"+data.totalRevenue}                                    color="text-kaiGreen"/>
-                  <StatBox label="LegaSea Signups" val={rawData.totalSignups??"-"}                                color="text-kaiBlue"/>
-                  <StatBox label="Avg per Event"   val={rawData.avgRevenue?`$${rawData.avgRevenue}`:"-"}          color="text-coffeeBrown"/>
+                  <StatBox label="Events"     val={data.totalEvents}                 color="text-kaiBurgundy"/>
+                  <StatBox label="Revenue"    val={"$"+data.totalRevenue}            color="text-kaiGreen"/>
+                  <StatBox label="Staff Cost" val={"$"+data.totalStaffCost}          color="text-kaiBlue" sub="@ $30/hr"/>
+                  <StatBox label="Stock Cost" val={"$"+data.totalStockCost}          color="text-coffeeBrown" sub="most recent prices"/>
+                </div>
+
+                {/* P&L */}
+                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-xs text-gray-400 mb-1">Estimated Profit</div>
+                      <div className={`text-2xl font-serif font-bold ${profitColor}`}>${data.estimatedProfit}</div>
+                      <div className="text-xs text-gray-300 mt-1">Revenue − Stock − Staff</div>
+                    </div>
+                    <div className="text-right space-y-0.5 text-xs">
+                      <div className="text-gray-500">Revenue <span className="font-semibold text-gray-700">${data.totalRevenue}</span></div>
+                      <div className="text-gray-500">− Stock <span className="font-semibold text-gray-700">${data.totalStockCost}</span></div>
+                      <div className="text-gray-500">− Staff <span className="font-semibold text-gray-700">${data.totalStaffCost}</span></div>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Events list */}
